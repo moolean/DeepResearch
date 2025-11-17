@@ -225,7 +225,11 @@ bash run_react_infer.sh
 ```
 ---
 
-With these steps, you can fully prepare the environment, configure the dataset, and run the model. For more details, consult the inline comments in each script or open an issue.
+With these steps, you can fully prepare the environment, configure the dataset, and run the model. For more details:
+- Consult the inline comments in each script
+- See [CONFIGURATION_GUIDE.md](./CONFIGURATION_GUIDE.md) for detailed configuration examples and best practices
+- Check `.env.remote_api_example` for a ready-to-use remote API configuration template
+- Open an issue if you need help
 
 ### 6. Using Remote APIs (OpenRouter, etc.)
 
