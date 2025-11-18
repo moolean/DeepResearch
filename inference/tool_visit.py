@@ -3,7 +3,7 @@ import os
 import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Union
+from typing import List, Union, Tuple, Optional
 import requests
 from qwen_agent.tools.base import BaseTool, register_tool
 from prompt import EXTRACTOR_PROMPT 
@@ -13,11 +13,15 @@ from urllib.parse import urlparse, unquote
 import time 
 from transformers import AutoTokenizer
 import tiktoken
+import asyncio
+import ssl
+import httpx
 
 VISIT_SERVER_TIMEOUT = int(os.getenv("VISIT_SERVER_TIMEOUT", 200))
 WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 150000))
 
 JINA_API_KEYS = os.getenv("JINA_API_KEYS", "")
+USE_DIRECT_FETCH = os.getenv("USE_DIRECT_FETCH", "false").lower() == "true"
 
 
 @staticmethod
@@ -128,6 +132,158 @@ class Visit(BaseTool):
                     return ""
                 continue
 
+    async def direct_fetch_url(self, url: str, max_retries: int = 3, retry_delay: float = 2.0) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Directly fetch and extract content from a URL using httpx and trafilatura.
+        
+        Args:
+            url: The URL to fetch
+            max_retries: Maximum number of retry attempts
+            retry_delay: Base delay between retries in seconds
+            
+        Returns:
+            Tuple of (text_content, error_message). If successful, returns (text, None).
+            If failed, returns (None, error_message).
+        """
+        html = None
+        last_error = None
+        
+        try:
+            import trafilatura
+        except ImportError:
+            return None, "trafilatura is not installed. Please install it with: pip install trafilatura"
+        
+        for attempt in range(max_retries):
+            try:
+                # Set comprehensive headers to mimic a real browser
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "DNT": "1",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Cache-Control": "max-age=0",
+                    "Referer": "https://www.google.com/"
+                }
+                
+                # Add delay between retries
+                if attempt > 0:
+                    await asyncio.sleep(retry_delay * attempt)
+                
+                # Create a custom SSL context that allows legacy renegotiation
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                # Enable legacy renegotiation for older servers
+                ssl_context.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+                
+                # Fetch HTML content with longer timeout and retry logic
+                async with httpx.AsyncClient(
+                    timeout=10.0, 
+                    follow_redirects=True,
+                    max_redirects=5,
+                    http2=True,
+                    verify=ssl_context
+                ) as client:
+                    response = await client.get(url, headers=headers)
+                    response.raise_for_status()
+                    html = response.text
+                    break  # Success, exit retry loop
+                    
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    print(f"HTTP 403 for URL {url} (attempt {attempt + 1}/{max_retries})")
+                    last_error = (
+                        f"Access denied (HTTP 403). The website '{url}' is blocking automated requests. "
+                        "This could be due to rate limiting, WAF protection, or bot detection. "
+                        "Please try a different URL or access the site manually."
+                    )
+                    if attempt < max_retries - 1:
+                        continue  # Retry
+                elif e.response.status_code == 404:
+                    last_error = f"Page not found (HTTP 404). The URL '{url}' does not exist."
+                    break  # Don't retry for 404
+                elif e.response.status_code >= 500:
+                    print(f"Server error {e.response.status_code} for URL {url} (attempt {attempt + 1}/{max_retries})")
+                    last_error = f"Server error (HTTP {e.response.status_code}). The website is experiencing issues. Please try again later."
+                    if attempt < max_retries - 1:
+                        continue  # Retry for server errors
+                else:
+                    last_error = f"HTTP error {e.response.status_code}: {str(e)[:200]}"
+                    break  # Don't retry for other errors
+            except httpx.TimeoutException:
+                print(f"Timeout for URL {url} (attempt {attempt + 1}/{max_retries})")
+                last_error = f"Request timeout. The website took too long to respond. Please try again later."
+                if attempt < max_retries - 1:
+                    continue  # Retry on timeout
+            except httpx.RequestError as e:
+                print(f"Request error for URL {url}: {e} (attempt {attempt + 1}/{max_retries})")
+                last_error = f"Network error: {str(e)}"
+                if attempt < max_retries - 1:
+                    continue  # Retry on network errors
+            except Exception as e:
+                print(f"Unexpected error fetching URL {url}: {e}")
+                last_error = f"Unexpected error: {str(e)}"
+                break  # Don't retry for unexpected errors
+        
+        if html is None:
+            return None, last_error or "Failed to fetch HTML content after all retries"
+        
+        try:
+            # Extract text content using trafilatura
+            # Run in executor since trafilatura is synchronous
+            loop = asyncio.get_event_loop()
+            text = await loop.run_in_executor(
+                None,
+                lambda: trafilatura.extract(
+                    html,
+                    include_comments=False,
+                    include_images=False,
+                    include_tables=False,
+                    favor_recall=True,
+                    fast=True
+                )
+            )
+            
+            if not text:
+                return None, "Could not extract readable content from the page. The page may be empty or use unsupported formats."
+            
+            return text, None
+        except Exception as e:
+            print(f"Error extracting content: {e}")
+            return None, f"Content extraction failed: {str(e)}"
+
+    def direct_fetch_url_sync(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Synchronous wrapper for direct_fetch_url.
+        
+        Args:
+            url: The URL to fetch
+            
+        Returns:
+            Tuple of (text_content, error_message)
+        """
+        try:
+            # Try to get the current event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # If there's already a running loop, create a new one in a thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self.direct_fetch_url(url))
+                    return future.result(timeout=60)
+            except RuntimeError:
+                # No running loop, we can create one
+                return asyncio.run(self.direct_fetch_url(url))
+        except Exception as e:
+            return None, f"Error in direct fetch: {str(e)}"
+
 
     def jina_readpage(self, url: str) -> str:
         """
@@ -167,6 +323,17 @@ class Visit(BaseTool):
         return "[visit] Failed to read page."
 
     def html_readpage_jina(self, url: str) -> str:
+        # Check if direct fetch is enabled
+        if USE_DIRECT_FETCH:
+            print(f"Using direct fetch for URL: {url}")
+            text_content, error = self.direct_fetch_url_sync(url)
+            if text_content:
+                return text_content
+            else:
+                print(f"Direct fetch failed: {error}")
+                return "[visit] Failed to read page."
+        
+        # Use Jina API if direct fetch is disabled or not configured
         max_attempts = 8
         for attempt in range(max_attempts):
             content = self.jina_readpage(url)
