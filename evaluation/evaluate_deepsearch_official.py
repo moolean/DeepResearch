@@ -183,25 +183,31 @@ def count_tokens_with_tokenizer(text, tokenizer):
         return len(text) // 4
 
 
-def aggregate_statistics(round1_file, round2_file, round3_file):
-    round1_stats = single_round_statistics(round1_file)
-    round2_stats = single_round_statistics(round2_file)
-    round3_stats = single_round_statistics(round3_file)
+def aggregate_statistics(*round_files):
+    """Aggregate statistics from multiple round files"""
+    all_stats = [single_round_statistics(f) for f in round_files]
     
-    keys = round1_stats.keys()  
+    if not all_stats:
+        return {}
+    
+    keys = all_stats[0].keys()  
     avg_stats = {} 
+    num_rounds = len(all_stats)
+    
     for key in keys: 
-        if isinstance(round1_stats[key], dict):
-            
+        if isinstance(all_stats[0][key], dict):
             avg_stats[key] = {}
-            all_keys = set(round1_stats[key].keys()) | set(round2_stats[key].keys()) | set(round3_stats[key].keys())
+            # Collect all keys from all rounds
+            all_keys = set()
+            for stats in all_stats:
+                all_keys |= set(stats[key].keys())
+            
             for nested_key in all_keys:
-                val1 = round1_stats[key].get(nested_key, 0)
-                val2 = round2_stats[key].get(nested_key, 0)
-                val3 = round3_stats[key].get(nested_key, 0)
-                avg_stats[key][nested_key] = round((val1 + val2 + val3) / 3, 3)
+                values = [stats[key].get(nested_key, 0) for stats in all_stats]
+                avg_stats[key][nested_key] = round(sum(values) / num_rounds, 3)
         else:
-            avg_stats[key] = round((round1_stats[key] + round2_stats[key] + round3_stats[key]) / 3 , 3)
+            values = [stats[key] for stats in all_stats]
+            avg_stats[key] = round(sum(values) / num_rounds, 3)
     
     return avg_stats
 
@@ -326,7 +332,7 @@ def single_round_statistics(input_file):
 
 
 def calculate_enhanced_statistics(round_results, round_items):
-    
+    """Calculate enhanced statistics for all rounds"""
     try:
         tokenizer = AutoTokenizer.from_pretrained(os.getenv("Qwen2_5_7B_PATH", ""))
     except Exception as e: 
@@ -336,7 +342,7 @@ def calculate_enhanced_statistics(round_results, round_items):
     correct_tool_calls = []
     correct_assistant_tokens = []
     
-    for round_name in ["round1", "round2", "round3"]:
+    for round_name in round_results.keys():
         results = round_results[round_name]
         items = round_items[round_name]
 
@@ -379,20 +385,21 @@ def calculate_enhanced_statistics(round_results, round_items):
     }
         
         
-def aggregate_results(round1_results, round2_results, round3_results): 
+def aggregate_results(round_results_dict): 
+    """Aggregate results from multiple rounds"""
     global dataset 
     query_results = {} 
     
-    for results, round_name in zip([round1_results, round2_results, round3_results], ["round1", "round2", "round3"]): 
+    # Get all round names
+    round_names = list(round_results_dict.keys())
+    
+    for round_name, results in round_results_dict.items():
         for result in results: 
             query = result["question"] 
             if query not in query_results:  
-                query_results[query] = {
-                    "round1": None, 
-                    "round2": None,  
-                    "round3": None, 
-                    "answer": result["answer"]
-                }
+                # Initialize with all round names set to None
+                query_results[query] = {rn: None for rn in round_names}
+                query_results[query]["answer"] = result["answer"]
             
             if is_correct_judgement(result["judgement"]):
                 query_results[query][round_name] = "Correct"
@@ -403,41 +410,65 @@ def aggregate_results(round1_results, round2_results, round3_results):
 
 
 def calculate_pass_at_k(query_results, k=10): 
+    """Calculate pass@k metric"""
     total_correct = 0 
 
     for query, results in query_results.items():
-        rounds = [results["round1"], results["round2"], results["round3"]][:k] 
+        # Get all round results (excluding 'answer' key)
+        round_keys = [key for key in results.keys() if key != "answer"]
+        rounds = [results[rk] for rk in sorted(round_keys)][:k] 
 
         if "Correct" in rounds: 
             total_correct += 1 
     
-    overall_pass = total_correct / len(query_results)
+    overall_pass = total_correct / len(query_results) if len(query_results) > 0 else 0
     return round(overall_pass * 100, 2)
 
 
-def calculate_best_pass_at_1(query_results):  
-    round_correct = {round_name: 0 for round_name in ["round1", "round2", "round3"]}
+def calculate_best_pass_at_1(query_results):
+    """Calculate best pass@1 across all rounds"""
+    if not query_results:
+        return 0
+    
+    # Get all round names (excluding 'answer')
+    sample_result = next(iter(query_results.values()))
+    round_names = [key for key in sample_result.keys() if key != "answer"]
+    
+    round_correct = {round_name: 0 for round_name in round_names}
 
     for query, results in query_results.items():
-        for round_name in ["round1", "round2", "round3"]: 
-            if results[round_name] == "Correct":  
+        for round_name in round_names: 
+            if results.get(round_name) == "Correct":  
                 round_correct[round_name] += 1 
 
+    if not round_correct:
+        return 0
+    
     overall_best = max(
         round_correct[round_name] / len(query_results)
-        for round_name in ["round1", "round2", "round3"]
+        for round_name in round_names
     )
 
     return round(overall_best * 100, 2)
 
 
-def calculate_avg_pass_at_3(query_results): 
-    round_names = ["round1", "round2", "round3"]
+def calculate_avg_pass_at_n(query_results):
+    """Calculate average pass@n across all rounds"""
+    if not query_results:
+        return 0
+    
+    # Get all round names (excluding 'answer')
+    sample_result = next(iter(query_results.values()))
+    round_names = [key for key in sample_result.keys() if key != "answer"]
+    
+    if not round_names:
+        return 0
+    
     total_correct = {round_name: 0 for round_name in round_names}
 
     for query, results in query_results.items():  
         for round_name in round_names:  
-            if results[round_name] == "Correct":
+            if results.get(round_name) == "Correct":
                 total_correct[round_name] += 1 
     
     avg_overall = sum(total_correct[r] / len(query_results) for r in round_names) / len(round_names)
@@ -478,15 +509,22 @@ def main():
     print(f"Judge prompt:\n {judge_prompt}")
     print(f"Judge model:\n {judge_model}")
 
-    round1_file, round2_file, round3_file = os.path.join(args.input_folder, "iter1.jsonl"), os.path.join(args.input_folder, "iter2.jsonl"), os.path.join(args.input_folder, "iter3.jsonl") 
-    for file in [round1_file, round2_file, round3_file]:
-        assert os.path.exists(file), f"Prediction {file} not found, three  rounds are required "
-     
-    round_items = {
-        "round1": process_single_round(round1_file),
-        "round2": process_single_round(round2_file),
-        "round3": process_single_round(round3_file)
-    }
+    # Automatically detect iteration files in the input folder
+    import glob
+    iter_files = sorted(glob.glob(os.path.join(args.input_folder, "iter*.jsonl")))
+    
+    if not iter_files:
+        raise FileNotFoundError(f"No iter*.jsonl files found in {args.input_folder}")
+    
+    print(f"Found {len(iter_files)} round(s): {[os.path.basename(f) for f in iter_files]}")
+    
+    # Build round_items dictionary dynamically
+    round_items = {}
+    round_files = {}
+    for i, file_path in enumerate(iter_files, 1):
+        round_name = f"round{i}"
+        round_items[round_name] = process_single_round(file_path)
+        round_files[round_name] = file_path
 
     round_results = {} 
 
@@ -498,8 +536,8 @@ def main():
             for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"Evaluating {round_name}"):
                 round_results[round_name].append(future.result())
     
-    for round_name in ["round1", "round2", "round3"]:
-        input_file = {"round1": round1_file, "round2": round2_file, "round3": round3_file}[round_name]
+    for round_name in round_items.keys():
+        input_file = round_files[round_name]
         scored_file = input_file.replace(".jsonl", "_scored.jsonl")
         original_items = round_items[round_name]
         
@@ -518,25 +556,29 @@ def main():
                 scored_item.update(orig_item)
                 f.write(json.dumps(scored_item, ensure_ascii=False) + '\n')
 
-    aggr_results = aggregate_results(round_results["round1"], round_results["round2"], round_results["round3"]) 
+    aggr_results = aggregate_results(round_results) 
     
-    pass_at_3 = calculate_pass_at_k(aggr_results, k=3)
+    num_rounds = len(round_items)
+    pass_at_k = calculate_pass_at_k(aggr_results, k=num_rounds)
     best_pass_at_1 = calculate_best_pass_at_1(aggr_results)
-    avg_pass_at_3 = calculate_avg_pass_at_3(aggr_results) 
+    avg_pass_at_n = calculate_avg_pass_at_n(aggr_results) 
     
 
     round_performance = {
         f"Round{i}_Pass@1": round(sum(1 for r in round_results[f"round{i}"] if is_correct_judgement(r["judgement"])) / len(round_results[f"round{i}"]) * 100, 2)
-        for i in [1, 2, 3]
+        for i in range(1, num_rounds + 1)
     }
 
     print(f"===========")
-    print(f"Avg. Pass@3 {avg_pass_at_3}%") 
+    print(f"Avg. Pass@{num_rounds} {avg_pass_at_n}%") 
     print(f"Best Pass@1 {best_pass_at_1}%")  
-    print(f"Pass@3 {pass_at_3}%") 
-    print(f"Pass@1 Round 1: {round_performance['Round1_Pass@1']}%  Round 2: {round_performance['Round2_Pass@1']}%  Round 3: {round_performance['Round3_Pass@1']}% \n")
+    print(f"Pass@{num_rounds} {pass_at_k}%") 
     
-    aggr_statistics = aggregate_statistics(round1_file, round2_file, round3_file)
+    # Print round performance dynamically
+    round_perf_str = "  ".join([f"Round {i}: {round_performance[f'Round{i}_Pass@1']}%" for i in range(1, num_rounds + 1)])
+    print(f"Pass@1 {round_perf_str}\n")
+    
+    aggr_statistics = aggregate_statistics(*round_files.values())
     print(f"# Invalid {aggr_statistics['num_invalid']}  # Extra Length {aggr_statistics['extra_length']}") 
     print(f"Avg. Action {aggr_statistics['avg_action']:.2f}  Avg. Visit Action {aggr_statistics['avg_visit_action']:.2f}  Avg. Search Action {aggr_statistics['avg_search_action']:.2f}  Avg. Other Action {aggr_statistics['avg_other_action']:.2f}") 
     print(f"Avg. Answer Length {aggr_statistics['avg_ans_length']:.2f}  Avg. Thinking Length {aggr_statistics['avg_think_length']:.2f}")
@@ -556,15 +598,11 @@ def main():
 
     overall_eval_dict = {
         "dataset": dataset, 
-        "files": {
-            "round1": round1_file,  
-            "round2": round2_file,   
-            "round3": round3_file
-        }, 
+        "files": round_files,
         "overall": {
-            "avg_pass_at_3": avg_pass_at_3, 
+            f"avg_pass_at_{num_rounds}": avg_pass_at_n, 
             "best_pass_at_1": best_pass_at_1, 
-            "pass_at_3": pass_at_3
+            f"pass_at_{num_rounds}": pass_at_k
         }, 
         "individual": round_performance, 
         "statistics": {**aggr_statistics, **enhanced_statistics}

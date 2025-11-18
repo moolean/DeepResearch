@@ -96,6 +96,9 @@ class ChatCompletions:
         if logprobs:
             payload["logprobs"] = True
         
+        if tools:
+            payload["tools"] = tools
+        
         # Add any additional kwargs
         payload.update(kwargs)
         
@@ -127,7 +130,8 @@ class ChatCompletions:
             message_data = choice_data.get("message", {})
             message = ChatCompletionMessage(
                 content=message_data.get("content", ""),
-                role=message_data.get("role", "assistant")
+                role=message_data.get("role", "assistant"),
+                tool_calls=message_data.get("tool_calls")
             )
             choice = ChatCompletionChoice(message=message, index=choice_data.get("index", 0))
             choices.append(choice)

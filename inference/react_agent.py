@@ -99,6 +99,19 @@ class MultiTurnReactAgent(FnCallAgent):
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
     
+    def get_tools_for_api(self):
+        """Get tools in OpenAI API format"""
+        from prompt import TOOL_DEFINITIONS
+        tools = []
+        for tool_name in self.enabled_tools:
+            if tool_name in TOOL_DEFINITIONS:
+                try:
+                    tool_def = json.loads(TOOL_DEFINITIONS[tool_name])
+                    tools.append(tool_def)
+                except json.JSONDecodeError:
+                    print(f"Warning: Failed to parse tool definition for {tool_name}")
+        return tools if tools else None
+    
     def call_server(self, msgs, planning_port, max_tries=10):
         
         # Use remote API configuration if enabled, otherwise use local server
@@ -115,6 +128,9 @@ class MultiTurnReactAgent(FnCallAgent):
             timeout=600.0,
         )
 
+        # Get tools in OpenAI format
+        tools = self.get_tools_for_api()
+        
         base_sleep_time = 1 
         for attempt in range(max_tries):
             try:
@@ -127,13 +143,27 @@ class MultiTurnReactAgent(FnCallAgent):
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
                     logprobs=True,
                     max_tokens=10000,
-                    presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1)
+                    presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1),
+                    tools=tools
                 )
                 content = chat_response.choices[0].message.content
 
                 # OpenRouter provides API calling. If you want to use OpenRouter, you need to uncomment line 89 - 90.
                 # reasoning_content = "<think>\n" + chat_response.choices[0].message.reasoning.strip() + "\n</think>"
-                # content = reasoning_content + content                
+                # content = reasoning_content + content
+                
+                # Check if content has tool calls first, if not check response.tool_calls
+                if content and '<tool_call>' not in content:
+                    # No tool call in content, check if OpenAI returned tool_calls
+                    tool_calls = getattr(chat_response.choices[0].message, 'tool_calls', None)
+                    if tool_calls:
+                        # Convert OpenAI tool_calls format to our format
+                        for tool_call in tool_calls:
+                            if hasattr(tool_call, 'function'):
+                                tool_name = tool_call.function.name
+                                tool_args = json.loads(tool_call.function.arguments)
+                                tool_call_str = json.dumps({"name": tool_name, "arguments": tool_args})
+                                content = content + f"\n<tool_call>\n{tool_call_str}\n</tool_call>"
                 
                 if content and content.strip():
                     print("--- Service call successful, received a valid response ---")
