@@ -149,3 +149,4 @@ cache/
 models/
 outputs/
 checkpoints/
+workspace/

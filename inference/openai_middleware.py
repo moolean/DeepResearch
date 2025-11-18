@@ -274,11 +274,9 @@ class lightllm_ChatCompletions(ChatCompletions):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-        
-        url = f"{self.base_url}/generate"  # LightLLM generate endpoint
-        
+                
         response = requests.post(
-            url,
+            self.base_url,
             headers=headers,
             json=payload,
             timeout=self.timeout

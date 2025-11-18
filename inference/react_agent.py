@@ -20,6 +20,7 @@ import asyncio
 USE_MIDDLEWARE = os.getenv('USE_OPENAI_MIDDLEWARE', 'false').lower() == 'true'
 if USE_MIDDLEWARE:
     from openai_middleware import OpenAICompatibleClient as OpenAI
+    from openai_middleware import LightLLMClient as OpenAI_LightLLM
     from openai_middleware import APIError, APIConnectionError, APITimeoutError
 else:
     from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
@@ -122,15 +123,19 @@ class MultiTurnReactAgent(FnCallAgent):
             openai_api_key = "EMPTY"
             openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
 
-        client = OpenAI(
-            api_key=openai_api_key,
-            base_url=openai_api_base,
-            timeout=600.0,
-        )
-
-        # Get tools in OpenAI format
+        if self.use_remote_api and "generate" in openai_api_base:
+            client = OpenAI_LightLLM(
+                api_key=openai_api_key,
+                base_url=openai_api_base,
+                timeout=600.0
+            )
+        else:
+            client = OpenAI(
+                    api_key=openai_api_key,
+                    base_url=openai_api_base,
+                    timeout=600.0,
+            )
         tools = self.get_tools_for_api()
-        
         base_sleep_time = 1 
         for attempt in range(max_tries):
             try:
@@ -138,6 +143,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 chat_response = client.chat.completions.create(
                     model=self.model,
                     messages=msgs,
+                    tools=tools,
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
@@ -185,7 +191,7 @@ class MultiTurnReactAgent(FnCallAgent):
             else:
                 print("Error: All retry attempts have been exhausted. The call has failed.")
         
-        return f"vllm server error!!!"
+        return f"main model server error!!!"
 
     def count_tokens(self, messages):
         tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path) 
