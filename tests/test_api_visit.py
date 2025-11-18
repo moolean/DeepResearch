@@ -2,11 +2,15 @@
 """
 Test script for Visit API (Web page reading via Jina and summarization via OpenAI-compatible API)
 Tests the availability of JINA_API_KEYS, API_KEY, API_BASE, and SUMMARY_MODEL_NAME
+Also tests the new direct URL fetch functionality
 """
 import os
 import sys
 import requests
 from openai import OpenAI
+
+# Add inference directory to path for testing direct fetch
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'inference'))
 
 def test_jina_api():
     """Test Jina reader API"""
@@ -105,18 +109,74 @@ def test_summary_api():
         print("   Please check your API_KEY, API_BASE, and SUMMARY_MODEL_NAME configuration")
         return False
 
+def test_direct_fetch():
+    """Test direct URL fetch functionality"""
+    print("\n=== Testing Direct URL Fetch ===")
+    
+    # Check if USE_DIRECT_FETCH is enabled
+    use_direct = os.environ.get('USE_DIRECT_FETCH', 'false').lower() == 'true'
+    print(f"ℹ USE_DIRECT_FETCH is set to: {use_direct}")
+    
+    # Test that the module can be imported and initialized
+    try:
+        import tool_visit
+        visit = tool_visit.Visit()
+        print("✓ Visit module imported and initialized successfully")
+        
+        # Check if trafilatura is available
+        try:
+            import trafilatura
+            print("✓ trafilatura is installed")
+        except ImportError:
+            print("⚠ WARNING: trafilatura is not installed. Direct fetch will not work.")
+            print("   Install with: pip install trafilatura")
+            return False
+        
+        # Check if h2 is available for HTTP/2 support
+        try:
+            import h2
+            print("✓ h2 is installed (HTTP/2 support available)")
+        except ImportError:
+            print("⚠ WARNING: h2 is not installed. HTTP/2 support is disabled.")
+            print("   Install with: pip install h2")
+            return False
+        
+        print("✅ PASSED: Direct fetch dependencies are available")
+        return True
+        
+    except Exception as e:
+        print(f"❌ FAILED: Error testing direct fetch: {str(e)}")
+        return False
+
 def test_visit_api():
     """Test complete visit functionality"""
     print("\n=== Testing Complete Visit API ===")
     
-    jina_ok = test_jina_api()
+    # Test Jina API (if not using direct fetch)
+    use_direct = os.environ.get('USE_DIRECT_FETCH', 'false').lower() == 'true'
+    
+    if use_direct:
+        print("\nℹ USE_DIRECT_FETCH is enabled, skipping Jina API test")
+        jina_ok = True  # Skip Jina test if using direct fetch
+        direct_ok = test_direct_fetch()
+    else:
+        print("\nℹ USE_DIRECT_FETCH is disabled, testing Jina API")
+        jina_ok = test_jina_api()
+        direct_ok = test_direct_fetch()  # Still check dependencies
+    
     summary_ok = test_summary_api()
     
-    if jina_ok and summary_ok:
+    if jina_ok and summary_ok and direct_ok:
         print("\n✅ PASSED: All Visit API components are working")
         return True
     else:
         print("\n❌ FAILED: Some Visit API components are not working")
+        if not jina_ok:
+            print("   - Jina API test failed")
+        if not summary_ok:
+            print("   - Summary API test failed")
+        if not direct_ok:
+            print("   - Direct fetch dependencies test failed")
         return False
 
 if __name__ == "__main__":
