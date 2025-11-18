@@ -25,7 +25,28 @@ if [ "$MODEL_PATH" = "/your/model/path" ] || [ -z "$MODEL_PATH" ]; then
 fi
 
 ######################################
-### 1. start server           ###
+### 1. Run API Tests              ###
+######################################
+
+echo "=== Running API Availability Tests ==="
+python -u "$ROOT_PATH/tests/run_api_tests.py"
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "================================================================"
+    echo "ERROR: API tests failed. Please fix the issues before continuing."
+    echo "================================================================"
+    exit 1
+fi
+
+echo ""
+echo "================================================================"
+echo "SUCCESS: All API tests passed. Proceeding with inference..."
+echo "================================================================"
+echo ""
+
+######################################
+### 2. start server           ###
 ######################################
 
 # Check if using remote API
@@ -46,7 +67,7 @@ else
     CUDA_VISIBLE_DEVICES=7 vllm serve $MODEL_PATH --host 0.0.0.0 --port 6008 --max_model_len 96544 --disable-log-requests &
 
     #######################################################
-    ### 2. Waiting for the server port to be ready  ###
+    ### 3. Waiting for the server port to be ready  ###
     #######################################################
 
     timeout=6000
@@ -115,7 +136,7 @@ else
 fi
 
 #####################################
-### 3. start infer               ####
+### 4. start infer               ####
 #####################################
 
 echo "==== Starting Inference ==="
