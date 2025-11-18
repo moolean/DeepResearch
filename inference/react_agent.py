@@ -28,14 +28,37 @@ OBS_END = '\n</tool_response>'
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv('MAX_LLM_CALL_PER_RUN', 100))
 
-TOOL_CLASS = [
-    FileParser(),
-    Scholar(),
-    Visit(),
-    Search(),
-    PythonInterpreter(),
-]
-TOOL_MAP = {tool.name: tool for tool in TOOL_CLASS}
+# Map tool names to their classes
+ALL_TOOLS = {
+    'parse_file': FileParser(),
+    'google_scholar': Scholar(),
+    'visit': Visit(),
+    'search': Search(),
+    'PythonInterpreter': PythonInterpreter(),
+}
+
+def get_enabled_tools():
+    """Get the list of enabled tools from environment variable."""
+    enabled_tools_env = os.getenv('ENABLED_TOOLS', 'search,visit,google_scholar,PythonInterpreter,parse_file')
+    enabled_tools = [tool.strip() for tool in enabled_tools_env.split(',')]
+    return enabled_tools
+
+def initialize_tools(enabled_tools=None):
+    """Initialize tools based on enabled_tools list."""
+    if enabled_tools is None:
+        enabled_tools = get_enabled_tools()
+    
+    tool_classes = []
+    for tool_name in enabled_tools:
+        if tool_name in ALL_TOOLS:
+            tool_classes.append(ALL_TOOLS[tool_name])
+        else:
+            print(f"Warning: Tool '{tool_name}' not found in available tools")
+    
+    return {tool.name: tool for tool in tool_classes}
+
+# Initialize tools based on environment configuration
+TOOL_MAP = initialize_tools()
 
 import random
 import datetime
@@ -52,14 +75,32 @@ class MultiTurnReactAgent(FnCallAgent):
 
         self.llm_generate_cfg = llm["generate_cfg"]
         self.llm_local_path = llm["model"]
+        
+        # Support for remote API configuration
+        self.use_remote_api = os.getenv('USE_REMOTE_API', 'false').lower() == 'true'
+        self.inference_api_base = os.getenv('INFERENCE_API_BASE', 'http://127.0.0.1:6001/v1')
+        self.inference_api_key = os.getenv('INFERENCE_API_KEY', 'EMPTY')
+        
+        # Get enabled tools for generating appropriate system prompt
+        self.enabled_tools = get_enabled_tools()
+        
+        print(f"Agent initialized with USE_REMOTE_API={self.use_remote_api}")
+        if self.use_remote_api:
+            print(f"Using remote API at: {self.inference_api_base}")
+        print(f"Enabled tools: {', '.join(self.enabled_tools)}")
 
     def sanity_check_output(self, content):
         return "<think>" in content and "</think>" in content
     
     def call_server(self, msgs, planning_port, max_tries=10):
         
-        openai_api_key = "EMPTY"
-        openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
+        # Use remote API configuration if enabled, otherwise use local server
+        if self.use_remote_api:
+            openai_api_key = self.inference_api_key
+            openai_api_base = self.inference_api_base
+        else:
+            openai_api_key = "EMPTY"
+            openai_api_base = f"http://127.0.0.1:{planning_port}/v1"
 
         client = OpenAI(
             api_key=openai_api_key,
@@ -129,7 +170,8 @@ class MultiTurnReactAgent(FnCallAgent):
         planning_port = data['planning_port']
         answer = data['item']['answer']
         self.user_prompt = question
-        system_prompt = SYSTEM_PROMPT
+        # Use dynamic system prompt based on enabled tools
+        system_prompt = get_system_prompt(self.enabled_tools)
         cur_date = today_date()
         system_prompt = system_prompt + str(cur_date)
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]

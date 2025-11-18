@@ -164,9 +164,14 @@ if __name__ == "__main__":
             'model_type': 'qwen_dashscope'
         }
 
+        # Get enabled tools from environment, fallback to default list
+        enabled_tools_env = os.getenv('ENABLED_TOOLS', 'search,visit,google_scholar,PythonInterpreter')
+        enabled_tools = [tool.strip() for tool in enabled_tools_env.split(',')]
+        print(f"Enabled tools from environment: {enabled_tools}")
+
         test_agent = MultiTurnReactAgent(
             llm=llm_cfg,
-            function_list=["search", "visit", "google_scholar", "PythonInterpreter"]
+            function_list=enabled_tools
         )
 
         write_locks = {i: threading.Lock() for i in range(1, roll_out_count + 1)}

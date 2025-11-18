@@ -154,11 +154,69 @@ project_root/
 
 ### 4. Configure the Inference Script
 
-- Open `run_react_infer.sh` and modify the following variables as instructed in the comments:
+#### Basic Configuration
+
+Edit your `.env` file to configure basic inference settings:
   - `MODEL_PATH` - path to the local or remote model weights.
   - `DATASET` - full path to your evaluation file, e.g. `eval_data/my_questions.jsonl` or `/path/to/my_questions.json`.
   - `OUTPUT_PATH` - path for saving the prediction results, e.g. `./outputs`.
-- Depending on the tools you enable (retrieval, calculator, web search, etc.), provide the required `API_KEY`, `BASE_URL`, or other credentials. Each key is explained inline in the bash script.
+  - `ROLLOUT_COUNT` - number of inference rounds to run (default: 3)
+  - `TEMPERATURE` - sampling temperature (default: 0.85)
+  - `PRESENCE_PENALTY` - presence penalty for generation (default: 1.1)
+  - `MAX_WORKERS` - maximum parallel workers (default: 30)
+
+#### Advanced Configuration
+
+**Remote API Inference**
+
+You can now use a remote API endpoint instead of running local VLLM servers:
+
+```bash
+# In .env file
+USE_REMOTE_API=true
+INFERENCE_API_BASE=http://your-api-endpoint.com/v1
+INFERENCE_API_KEY=your_api_key
+```
+
+When `USE_REMOTE_API=true`, the script will skip starting local VLLM servers and use the configured remote API instead.
+
+**Tool Selection**
+
+You can now customize which tools are available during inference by setting `ENABLED_TOOLS` in your `.env` file:
+
+```bash
+# Enable only specific tools (comma-separated)
+ENABLED_TOOLS=search,visit,PythonInterpreter
+
+# Available tools:
+# - search: Google web search
+# - visit: Web page visiting and summarization
+# - google_scholar: Academic paper search via Google Scholar
+# - PythonInterpreter: Python code execution sandbox
+# - parse_file: Parse uploaded files (PDF, DOCX, etc.)
+```
+
+The system prompt will automatically be updated to include only the enabled tools, making the model more focused on the available functionality.
+
+**Custom Prompts**
+
+You can override the default system and extractor prompts via environment variables:
+
+```bash
+# In .env file (optional)
+SYSTEM_PROMPT="Your custom system prompt here..."
+EXTRACTOR_PROMPT="Your custom extractor prompt here..."
+```
+
+If not set, default prompts will be used.
+
+**LLM Call Limits**
+
+Control the maximum number of LLM calls per inference run:
+
+```bash
+MAX_LLM_CALL_PER_RUN=100  # Default is 100
+```
 
 ### 5. Run the Inference Script
 
@@ -167,15 +225,38 @@ bash run_react_infer.sh
 ```
 ---
 
-With these steps, you can fully prepare the environment, configure the dataset, and run the model. For more details, consult the inline comments in each script or open an issue.
+With these steps, you can fully prepare the environment, configure the dataset, and run the model. For more details:
+- Consult the inline comments in each script
+- See [CONFIGURATION_GUIDE.md](./CONFIGURATION_GUIDE.md) for detailed configuration examples and best practices
+- Check `.env.remote_api_example` for a ready-to-use remote API configuration template
+- Open an issue if you need help
 
-### 6. You can use OpenRouter's API to call our model
+### 6. Using Remote APIs (OpenRouter, etc.)
 
 Tongyi-DeepResearch-30B-A3B is now available at [OpenRouter](https://openrouter.ai/alibaba/tongyi-deepresearch-30b-a3b). You can run the inference without any GPUs.
 
-You need to modify the following in the file [inference/react_agent.py](https://github.com/Alibaba-NLP/DeepResearch/blob/main/inference/react_agent.py):
+**Option 1: Using Environment Configuration (Recommended)**
 
-- In the call_server function: Set the API key and URL to your OpenRouter account’s API and URL.
+Simply configure your `.env` file:
+
+```bash
+USE_REMOTE_API=true
+INFERENCE_API_BASE=https://openrouter.ai/api/v1
+INFERENCE_API_KEY=your_openrouter_api_key
+MODEL_PATH=alibaba/tongyi-deepresearch-30b-a3b
+```
+
+Then run the inference script normally:
+
+```bash
+bash inference/run_react_infer.sh
+```
+
+**Option 2: Manual Modification**
+
+Alternatively, you can manually modify [inference/react_agent.py](https://github.com/Alibaba-NLP/DeepResearch/blob/main/inference/react_agent.py):
+
+- In the call_server function: Set the API key and URL to your OpenRouter account's API and URL.
 - Change the model name to alibaba/tongyi-deepresearch-30b-a3b.
 - Adjust the content concatenation way as described in the comments on lines **88–90.**
 
