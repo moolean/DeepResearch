@@ -218,11 +218,38 @@ Control the maximum number of LLM calls per inference run:
 MAX_LLM_CALL_PER_RUN=100  # Default is 100
 ```
 
-### 5. Run the Inference Script
+### 5. Test API Availability (Optional but Recommended)
+
+Before running inference, you can verify that all required APIs are properly configured:
 
 ```bash
-bash run_react_infer.sh
+bash test_apis.sh
 ```
+
+This will test:
+- Search API (SERPER_KEY_ID)
+- Web Visit/Reading API (JINA_API_KEYS, API_KEY, API_BASE)
+- Google Scholar API (SERPER_KEY_ID)
+- Python Interpreter (SANDBOX_FUSION_ENDPOINT)
+- File Parser API (DASHSCOPE_API_KEY)
+
+If any API is not properly configured, the test will fail with a clear error message indicating what needs to be fixed.
+
+> **Note**: API tests are automatically run when you execute `run_react_infer.sh`. If tests fail, inference will not start.
+
+### 6. Run the Inference Script
+
+```bash
+bash inference/run_react_infer.sh
+```
+
+The script will:
+1. Automatically run API tests to verify your environment
+2. Start VLLM servers (if not using remote API)
+3. Begin inference on your dataset
+
+If API tests fail, the script will terminate with helpful error messages.
+
 ---
 
 With these steps, you can fully prepare the environment, configure the dataset, and run the model. For more details:
@@ -231,7 +258,7 @@ With these steps, you can fully prepare the environment, configure the dataset, 
 - Check `.env.remote_api_example` for a ready-to-use remote API configuration template
 - Open an issue if you need help
 
-### 6. Using Remote APIs (OpenRouter, etc.)
+### 7. Using Remote APIs (OpenRouter, etc.)
 
 Tongyi-DeepResearch-30B-A3B is now available at [OpenRouter](https://openrouter.ai/alibaba/tongyi-deepresearch-30b-a3b). You can run the inference without any GPUs.
 
