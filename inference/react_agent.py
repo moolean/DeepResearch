@@ -4,7 +4,6 @@ import os
 from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
 from qwen_agent.llm.schema import Message
 from qwen_agent.utils.utils import build_text_completion_prompt
-from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 from transformers import AutoTokenizer 
 from datetime import datetime
 from qwen_agent.agents.fncall_agent import FnCallAgent
@@ -16,6 +15,14 @@ from qwen_agent.utils.utils import format_as_text_message, merge_generate_cfgs
 from prompt import *
 import time
 import asyncio
+
+# Import middleware or OpenAI based on configuration
+USE_MIDDLEWARE = os.getenv('USE_OPENAI_MIDDLEWARE', 'false').lower() == 'true'
+if USE_MIDDLEWARE:
+    from openai_middleware import OpenAICompatibleClient as OpenAI
+    from openai_middleware import APIError, APIConnectionError, APITimeoutError
+else:
+    from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
 from tool_file import *
 from tool_scholar import *
@@ -177,6 +184,10 @@ class MultiTurnReactAgent(FnCallAgent):
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
+        
+        # Track used tools during the run
+        used_tools = set()
+        
         while num_llm_calls_available > 0:
             # Check whether time is reached
             if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
@@ -187,7 +198,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     "answer": answer,
                     "messages": messages,
                     "prediction": prediction,
-                    "termination": termination
+                    "termination": termination,
+                    "tools": self._get_tools_dict(used_tools)
                 }
                 return result
             round += 1
@@ -205,6 +217,7 @@ class MultiTurnReactAgent(FnCallAgent):
                         try:
                             code_raw=content.split('<tool_call>')[1].split('</tool_call>')[0].split('<code>')[1].split('</code>')[0].strip()
                             result = TOOL_MAP['PythonInterpreter'].call(code_raw)
+                            used_tools.add('PythonInterpreter')
                         except:
                             result = "[Python Interpreter Error]: Formatting error."
 
@@ -213,6 +226,8 @@ class MultiTurnReactAgent(FnCallAgent):
                         tool_name = tool_call.get('name', '')
                         tool_args = tool_call.get('arguments', {})
                         result = self.custom_call_tool(tool_name, tool_args)
+                        if tool_name:
+                            used_tools.add(tool_name)
 
                 except:
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
@@ -246,7 +261,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     "answer": answer,
                     "messages": messages,
                     "prediction": prediction,
-                    "termination": termination
+                    "termination": termination,
+                    "tools": self._get_tools_dict(used_tools)
                 }
                 return result
 
@@ -263,7 +279,8 @@ class MultiTurnReactAgent(FnCallAgent):
             "answer": answer,
             "messages": messages,
             "prediction": prediction,
-            "termination": termination
+            "termination": termination,
+            "tools": self._get_tools_dict(used_tools)
         }
         return result
 
@@ -287,3 +304,28 @@ class MultiTurnReactAgent(FnCallAgent):
 
         else:
             return f"Error: Tool {tool_name} not found"
+    
+    def _get_tools_dict(self, used_tools: set) -> dict:
+        """
+        Get a dictionary of tool definitions that were used during the run.
+        
+        Args:
+            used_tools: Set of tool names that were used
+        
+        Returns:
+            Dictionary with tool names as keys and their definitions as values
+        """
+        from prompt import TOOL_DEFINITIONS
+        tools_dict = {}
+        
+        for tool_name in used_tools:
+            if tool_name in TOOL_DEFINITIONS:
+                # Parse the JSON string to get the tool definition
+                try:
+                    tool_def = json.loads(TOOL_DEFINITIONS[tool_name])
+                    tools_dict[tool_name] = tool_def
+                except json.JSONDecodeError:
+                    # If parsing fails, store the raw string
+                    tools_dict[tool_name] = TOOL_DEFINITIONS[tool_name]
+        
+        return tools_dict

@@ -43,8 +43,15 @@ Control where inference requests are sent:
 | `USE_REMOTE_API` | Use remote API instead of local VLLM servers | `false` |
 | `INFERENCE_API_BASE` | Base URL for the inference API | `http://127.0.0.1:6001/v1` |
 | `INFERENCE_API_KEY` | API key for authentication | `EMPTY` |
+| `USE_OPENAI_MIDDLEWARE` | Use requests-based middleware instead of openai library | `false` |
 
 **Use Case**: Run inference without GPUs by using services like OpenRouter, Azure OpenAI, or other OpenAI-compatible APIs.
+
+**OpenAI Middleware**: Set `USE_OPENAI_MIDDLEWARE=true` to use a lightweight requests-based HTTP client instead of the openai library. This middleware:
+- Mimics the OpenAI client interface (client.chat.completions.create)
+- Uses the `requests` library for HTTP calls instead of the openai SDK
+- Maintains full compatibility with existing code
+- Useful for custom API endpoints or debugging network requests
 
 ### 2. Tool Selection
 
@@ -200,6 +207,51 @@ If you're upgrading from a previous version:
 
 **Backward Compatibility**: All old configurations still work. The new features are additive.
 
+## Result File Format
+
+The evaluation results are stored in JSONL format (one JSON object per line). Each result entry includes:
+
+- `question`: The input question
+- `answer`: The expected answer
+- `messages`: Full conversation history with the agent
+- `prediction`: The agent's final answer
+- `termination`: How the inference ended (e.g., 'answer', 'timeout', 'token limit reached')
+- **`tools`**: Dictionary of tool definitions that were actually used during inference
+
+### Tools Dictionary
+
+The `tools` field contains the complete OpenAI-format definitions for each tool that was called during the inference run. This allows you to:
+- Track which tools were used for each question
+- Analyze tool usage patterns across your dataset
+- Reproduce tool configurations for specific queries
+- Debug tool-related issues
+
+Example:
+```json
+{
+  "question": "What is the weather in Paris?",
+  "prediction": "The weather in Paris is...",
+  "tools": {
+    "search": {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "description": "Perform Google web searches...",
+        "parameters": {...}
+      }
+    },
+    "visit": {
+      "type": "function",
+      "function": {
+        "name": "visit",
+        "description": "Visit webpage(s)...",
+        "parameters": {...}
+      }
+    }
+  }
+}
+```
+
 ## Best Practices
 
 1. **Keep `.env` in `.gitignore`**: Never commit API keys to version control
@@ -207,6 +259,7 @@ If you're upgrading from a previous version:
 3. **Start with defaults**: Use default settings first, then tune as needed
 4. **Enable only needed tools**: Reduce token usage and improve focus
 5. **Monitor token usage**: Use `MAX_LLM_CALL_PER_RUN` to control costs
+6. **Analyze tool usage**: Use the `tools` field in results to understand which tools are most valuable
 
 ## Support
 
