@@ -69,11 +69,7 @@ def initialize_tools(enabled_tools=None):
 TOOL_MAP = initialize_tools()
 
 import random
-import datetime
 
-
-def today_date():
-    return datetime.date.today().strftime("%Y-%m-%d")
 
 class MultiTurnReactAgent(FnCallAgent):
     def __init__(self,
@@ -82,7 +78,7 @@ class MultiTurnReactAgent(FnCallAgent):
                  **kwargs):
 
         self.llm_generate_cfg = llm["generate_cfg"]
-        self.llm_local_path = llm["model"]
+        self.llm_local_path = llm["model_path"]
         
         # Support for remote API configuration
         self.use_remote_api = os.getenv('USE_REMOTE_API', 'false').lower() == 'true'
@@ -139,11 +135,11 @@ class MultiTurnReactAgent(FnCallAgent):
         base_sleep_time = 1 
         for attempt in range(max_tries):
             try:
-                print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
+                if attempt != 0:
+                    print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
                 chat_response = client.chat.completions.create(
                     model=self.model,
                     messages=msgs,
-                    tools=tools,
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
@@ -215,8 +211,7 @@ class MultiTurnReactAgent(FnCallAgent):
         self.user_prompt = question
         # Use dynamic system prompt based on enabled tools
         system_prompt = get_system_prompt(self.enabled_tools)
-        cur_date = today_date()
-        system_prompt = system_prompt + str(cur_date)
+        
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         round = 0
@@ -241,7 +236,6 @@ class MultiTurnReactAgent(FnCallAgent):
             round += 1
             num_llm_calls_available -= 1
             content = self.call_server(messages, planning_port)
-            print(f'Round {round}: {content}')
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]

@@ -1,23 +1,7 @@
 import os
 
 # Default system prompt template
-DEFAULT_SYSTEM_PROMPT = """You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For every request, synthesize information from credible, diverse sources to deliver a comprehensive, accurate, and objective response. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer within <answer></answer> tags.
-
-# Tools
-
-You may call one or more functions to assist with the user query.
-
-You are provided with function signatures within <tools></tools> XML tags:
-<tools>
-{tool_definitions}
-</tools>
-
-For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
-<tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
-</tool_call>
-
-Current date: """
+DEFAULT_SYSTEM_PROMPT = """You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For every request, synthesize information from credible, diverse sources to deliver a comprehensive, accurate, and objective response. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer within <answer></answer> tags."""
 
 # Tool definitions mapping
 TOOL_DEFINITIONS = {
@@ -43,14 +27,7 @@ def get_system_prompt(enabled_tools=None):
     if custom_prompt:
         return custom_prompt
     
-    # Filter tool definitions based on enabled tools
-    if enabled_tools is None:
-        enabled_tools = list(TOOL_DEFINITIONS.keys())
-    
-    tool_defs = [TOOL_DEFINITIONS[tool] for tool in enabled_tools if tool in TOOL_DEFINITIONS]
-    tool_definitions_str = '\n'.join(tool_defs)
-    
-    return DEFAULT_SYSTEM_PROMPT.replace('{tool_definitions}', tool_definitions_str)
+    return DEFAULT_SYSTEM_PROMPT
 
 # For backward compatibility
 SYSTEM_PROMPT = get_system_prompt()

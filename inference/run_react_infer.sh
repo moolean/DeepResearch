@@ -1,8 +1,10 @@
 #!/bin/bash
 source /mnt/afs/yaotiankuo/agents/fc_workspace/DeepResearch/.venv/bin/activate
 # Load environment variables from .env file
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="$SCRIPT_DIR/../.env"
+
+ROOT_PATH=/mnt/afs/yaotiankuo/agents/fc_workspace/DeepResearch
+
+ENV_FILE="$ROOT_PATH/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
     echo "Error: .env file not found at $ENV_FILE"
@@ -120,13 +122,14 @@ echo "==== Starting Inference ==="
 echo "Configuration:"
 echo "  - Dataset: $DATASET"
 echo "  - Output Path: $OUTPUT_PATH"
-echo "  - Model: $MODEL_PATH"
+echo "  - Model_PATH: $MODEL_PATH"
+echo "  - Model_NAME: $MODEL_NAME"
 echo "  - Temperature: $TEMPERATURE"
 echo "  - Presence Penalty: $PRESENCE_PENALTY"
 echo "  - Rollout Count: $ROLLOUT_COUNT"
 echo "  - Max Workers: $MAX_WORKERS"
 echo "  - Enabled Tools: ${ENABLED_TOOLS:-search,visit,google_scholar,PythonInterpreter,parse_file}"
 
-cd "$( dirname -- "${BASH_SOURCE[0]}" )"
+cd $ROOT_PATH
 
-python -u run_multi_react.py --dataset "$DATASET" --output "$OUTPUT_PATH" --max_workers $MAX_WORKERS --model $MODEL_PATH --temperature $TEMPERATURE --presence_penalty $PRESENCE_PENALTY --total_splits ${WORLD_SIZE:-1} --worker_split $((${RANK:-0} + 1)) --roll_out_count $ROLLOUT_COUNT
+python -u inference/run_multi_react.py --dataset "$DATASET" --output "$OUTPUT_PATH" --max_workers $MAX_WORKERS --model_path $MODEL_PATH --model_name $MODEL_NAME --temperature $TEMPERATURE --presence_penalty $PRESENCE_PENALTY --total_splits ${WORLD_SIZE:-1} --worker_split $((${RANK:-0} + 1)) --roll_out_count $ROLLOUT_COUNT

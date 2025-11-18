@@ -39,7 +39,7 @@ messages = [
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "What is the weather in shanghai?"}
 ]
-for i in range(100):
+for i in range(1):
     response = client.chat.completions.create(
         model="qwen3-235b-a22b-instruct-2507",
         messages=messages,
@@ -50,4 +50,4 @@ for i in range(100):
         max_tokens=1024,
     )
 
-    print("Response:", repr(response.choices[0].message.content))
+    print("Response:", repr(response.choices[0].message.tool_calls))

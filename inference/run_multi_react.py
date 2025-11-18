@@ -12,7 +12,8 @@ import math
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="")
+    parser.add_argument("--model_path", type=str, default="")
+    parser.add_argument("--model_name", type=str, default="")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--dataset", type=str, default="gaia")
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -24,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument("--worker_split", type=int, default=1)
     args = parser.parse_args()
 
-    model = args.model
+    model_path = args.model_path
     output_base = args.output
     roll_out_count = args.roll_out_count
     total_splits = args.total_splits
@@ -35,10 +36,10 @@ if __name__ == "__main__":
         print(f"Error: worker_split ({worker_split}) must be between 1 and total_splits ({total_splits})")
         exit(1)
 
-    model_name = os.path.basename(model.rstrip('/'))
+    model_name = args.model_name if args.model_name else os.path.basename(model_path.rstrip('/'))
 
-    model_dir = os.path.join(output_base, f"{model_name}_sglang")
-    dataset_dir = os.path.join(model_dir, args.dataset)
+    model_dir = os.path.join(output_base, model_name)
+    dataset_dir = os.path.join(model_dir, os.path.basename(args.dataset).replace('.jsonl', '').replace('.json', ''))
 
     os.makedirs(dataset_dir, exist_ok=True)
 
@@ -153,7 +154,7 @@ if __name__ == "__main__":
         print("All rollouts have been completed and no execution is required.")
     else:
         llm_cfg = {
-            'model': model,
+            'model_path': model_path,
             'generate_cfg': {
                 'max_input_tokens': 320000,
                 'max_retries': 10,
@@ -181,7 +182,7 @@ if __name__ == "__main__":
                 executor.submit(
                     test_agent._run,
                     task,
-                    model
+                    model_name
                 ): task for task in tasks_to_run_all
             }
 

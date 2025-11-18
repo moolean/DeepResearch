@@ -10,6 +10,9 @@ import re
 import base64
 import logging
 from typing import Dict, List, Optional, Any
+import datetime
+from jinja2 import Environment, FileSystemLoader
+
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -50,6 +53,10 @@ class ChatCompletions:
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+    
+    def today_date(self):
+        return datetime.date.today().strftime("%Y-%m-%d")
+
     def create(
         self,
         model: str,
@@ -141,11 +148,8 @@ class ChatCompletions:
 class lightllm_ChatCompletions(ChatCompletions):
     """Mimics OpenAI's chat.completions API for LightLLM"""
     def __init__(self, api_key, base_url, timeout = 600):
-        self.USER_START = "<|im_start|>user\n"
-        self.ASSISTANT_START = "<|im_start|>assistant\n"
-        self.IM_END = "<|im_end|>\n"
-        self.IMG_TAG = "<img></img>\n"
-        self.AUDIO_TAG = "<audio></audio>\n"
+        env = Environment(loader=FileSystemLoader('inference/template'))
+        self.template = env.get_template('chat_template.jinja')
         super().__init__(api_key, base_url, timeout)
 
     def handle_url_sync(self, url):
@@ -181,75 +185,13 @@ class lightllm_ChatCompletions(ChatCompletions):
         - Returns OpenAI-compatible format with tool_calls
         """
         
-        # Build the prompt query in LightLLM format
-        query = ""
-        
-        # Process system message and tools
-        if len(messages) > 0 and messages[0]["role"] == "system":
-            query += "<|im_start|>system\n" + messages[0]["content"]
-            if tools:
-                # Add tool definitions to system prompt
-                tools_str = []
-                for tool in tools:
-                    tools_str.append(json.dumps(tool, ensure_ascii=False))
-                tool_define = "\n".join(tools_str)
-                tool_instruction = "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n" + tool_define + "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>"
-                query += tool_instruction
-            query += "<|im_end|>\n"
-            messages = messages[1:]
-        elif tools:
-            # No system message but we have tools
-            tools_str = []
-            for tool in tools:
-                tools_str.append(json.dumps(tool, ensure_ascii=False))
-            tool_define = "\n".join(tools_str)
-            tool_instruction = "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n" + tool_define + "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>"
-            query += "<|im_start|>system\n" + tool_instruction + "<|im_end|>\n"
-
-        images = []
-
-        # Process messages
-        for message in messages:
-            if message["role"] == "user":
-                query += self.USER_START
-                if isinstance(message["content"], list):
-                    # Multimodal content
-                    query_content = ""
-                    img_cnt = 0
-                    for content in message["content"]:
-                        if content["type"] == "image_url":
-                            query += self.IMG_TAG
-                            img_cnt += 1
-                            # Handle image URL synchronously
-                            image_url = content.get("image_url", {})
-                            if isinstance(image_url, dict):
-                                url = image_url.get("url", "")
-                            else:
-                                url = image_url
-                            image_data = self.handle_url_sync(url)
-                            images.append({"type": "base64", "data": image_data})
-                        elif content["type"] == "text":
-                            query_content = content["text"]
-                        else:
-                            raise ValueError("type must be text, image_url")
-                    if img_cnt >= 2:
-                        query += f"用户本轮上传了{img_cnt}张图\n"
-                    query += query_content + self.IM_END
-                else:
-                    if isinstance(message["content"], dict):
-                        logger.error(f"message content has found being dict: {message['content']}")
-                    query += str(message["content"]) + self.IM_END
-            elif message["role"] == "assistant":
-                query += self.ASSISTANT_START
-                query += message["content"] + self.IM_END
-            elif message["role"] == "tool":
-                query += self.USER_START
-                query_content = f"<tool_response>\n{message['content']}\n</tool_response>"
-                query += query_content + self.IM_END
-            else:
-                raise ValueError("role must be user, assistant, or tool")
-        
-        query += self.ASSISTANT_START
+        # 使用jinja模板组织输入，暂时不考虑image
+        query =  self.template.render(
+            messages=messages,
+            tools=tools if tools else [],
+            enable_thinking=True,
+            today_date=self.today_date()
+        )
 
         # Construct the payload for LightLLM API
         payload = {
@@ -264,10 +206,6 @@ class lightllm_ChatCompletions(ChatCompletions):
                 "stop_sequences": ["<|im_end|>"]
             },
         }
-
-        # Add multimodal params if images exist
-        if images:
-            payload["multimodal_params"] = {"images": images}
 
         # Make synchronous HTTP request
         headers = {
