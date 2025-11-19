@@ -147,20 +147,31 @@ class MultiTurnReactAgent(FnCallAgent):
                     tools=tools
                 )
 
-                content = chat_response.choices[0].message.content
+                # Extract separated fields from response
+                content = chat_response.choices[0].message.content or ""
                 reasoning_content = getattr(chat_response.choices[0].message, 'reasoning_content', None)
-                # Check if content has tool calls first, if not check response.tool_calls
-                if '<tool_call>' not in content:
-                    # No tool call in content, check if OpenAI returned tool_calls
-                    tool_calls = getattr(chat_response.choices[0].message, 'tool_calls', None)
-                    if tool_calls:
-                        # Convert OpenAI tool_calls format to our format
-                        for tool_call in tool_calls:
-                            if hasattr(tool_call, 'function'):
-                                tool_name = tool_call.function.name
+                tool_calls = getattr(chat_response.choices[0].message, 'tool_calls', None)
+                
+                # Log received fields for debugging
+                print(f"--- Response received - content_len: {len(content)}, "
+                      f"has_reasoning: {reasoning_content is not None}, "
+                      f"has_tool_calls: {tool_calls is not None}")
+                
+                # Check if content has tool calls embedded (for backward compatibility)
+                if '<tool_call>' not in content and tool_calls:
+                    # Convert separated tool_calls format to embedded format for agent logic
+                    for tool_call in tool_calls:
+                        if hasattr(tool_call, 'function'):
+                            tool_name = tool_call.function.name
+                            try:
                                 tool_args = json.loads(tool_call.function.arguments)
-                                tool_call_str = json.dumps({"name": tool_name, "arguments": tool_args})
-                                content = content + f"\n<tool_call>\n{tool_call_str}\n</tool_call>"
+                            except json.JSONDecodeError:
+                                print(f"Warning: Failed to parse tool call arguments: {tool_call.function.arguments}")
+                                tool_args = {}
+                            tool_call_str = json.dumps({"name": tool_name, "arguments": tool_args})
+                            content = content + f"\n<tool_call>\n{tool_call_str}\n</tool_call>"
+                            print(f"--- Converted tool_call to embedded format: {tool_name}")
+                
                 if content and content.strip():
                     print("--- Service call successful, received a valid response ---")
                     return content.strip(), reasoning_content
@@ -236,9 +247,15 @@ class MultiTurnReactAgent(FnCallAgent):
                 pos = content.find('<tool_response>')
                 content = content[:pos]
 
+            # Build message with separated fields
             message_cur = {"role": "assistant", "content": content.strip()}
+            
+            # Add reasoning_content as separate field if present
             if reasoning_content:
                 message_cur["reasoning_content"] = reasoning_content.strip()
+            
+            # Note: tool_calls remain embedded in content for now to maintain compatibility
+            # with downstream agent logic that parses <tool_call> tags
             messages.append(message_cur)
             
             if '<tool_call>' in content and '</tool_call>' in content:
