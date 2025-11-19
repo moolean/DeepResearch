@@ -118,6 +118,43 @@ class ChatCompletions:
         
         return tool_calls if tool_calls else None
     
+    def _extract_tool_calls_from_content(self, content: str) -> tuple[str, Optional[List]]:
+        """
+        Extract tool calls from content if they exist as <tool_call> tags.
+        Returns tuple of (cleaned_content, tool_calls_list).
+        """
+        import re
+        
+        # Pattern to find tool calls in content
+        toolcall_pattern = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+        toolcalls_matches = toolcall_pattern.findall(content)
+        
+        if not toolcalls_matches:
+            return content, None
+        
+        # Parse tool calls
+        tool_calls_list = []
+        for i, toolcall_str in enumerate(toolcalls_matches):
+            try:
+                toolcall_json = json.loads(toolcall_str)
+                function = ToolCallFunction(
+                    name=toolcall_json.get("name", ""),
+                    arguments=json.dumps(toolcall_json.get("arguments", {}))
+                )
+                tool_call = ToolCall(
+                    id=f"call_{i}_{int(time.time())}",
+                    type="function",
+                    function=function
+                )
+                tool_calls_list.append(tool_call)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse tool call from content: {toolcall_str}, error: {e}")
+        
+        # Remove tool call tags from content
+        cleaned_content = toolcall_pattern.sub('', content).strip()
+        
+        return cleaned_content, (tool_calls_list if tool_calls_list else None)
+    
     def _create_completion_from_data(self, model: str, content: str, 
                                      reasoning_content: Optional[str] = None,
                                      tool_calls: Optional[List] = None,
@@ -125,7 +162,24 @@ class ChatCompletions:
         """
         Helper method to create ChatCompletion from parsed data.
         Reduces code duplication.
+        
+        Handles tool_call detection in content:
+        - If tool_calls field is provided, remove <tool_call> tags from content
+        - If content has <tool_call> tags but no tool_calls field, parse them
         """
+        # Check if content has tool call tags
+        if '<tool_call>' in content:
+            if tool_calls:
+                # Tool calls field exists, remove tags from content
+                import re
+                cleaned_content = re.sub(r"<tool_call>\s*\{.*?\}\s*</tool_call>", '', content, flags=re.DOTALL).strip()
+                logger.debug(f"Removed tool_call tags from content (tool_calls field present)")
+                content = cleaned_content
+            else:
+                # No tool_calls field, parse from content
+                content, tool_calls = self._extract_tool_calls_from_content(content)
+                logger.debug(f"Extracted {len(tool_calls) if tool_calls else 0} tool_calls from content")
+        
         message = ChatCompletionMessage(
             reasoning_content=reasoning_content,
             content=content,

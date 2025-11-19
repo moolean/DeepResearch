@@ -108,7 +108,19 @@ class MultiTurnReactAgent(FnCallAgent):
         return tools if tools else None
     
     def call_server(self, msgs, planning_port, max_tries=10):
+        """
+        Call the OpenAI-compatible server following standard format.
+        Handles retries and error reporting.
         
+        Args:
+            msgs: List of message dicts with 'role', 'content', and optionally 
+                  'reasoning_content' and 'tool_calls' fields
+            planning_port: Port number for local server
+            max_tries: Maximum number of retry attempts
+        
+        Returns:
+            Tuple of (content, reasoning_content, tool_calls) - all three fields from response
+        """
         # Use remote API configuration if enabled, otherwise use local server
         if self.use_remote_api:
             openai_api_key = self.inference_api_key
@@ -129,12 +141,16 @@ class MultiTurnReactAgent(FnCallAgent):
                     base_url=openai_api_base,
                     timeout=6000.0,
             )
+        
         tools = self.get_tools_for_api()
         base_sleep_time = 1 
+        
         for attempt in range(max_tries):
             try:
                 if attempt != 0:
                     print(f"--- Attempting to call the service, try {attempt + 1}/{max_tries} ---")
+                
+                # Standard OpenAI API call
                 chat_response = client.chat.completions.create(
                     model=self.model,
                     messages=msgs,
@@ -147,7 +163,7 @@ class MultiTurnReactAgent(FnCallAgent):
                     tools=tools
                 )
 
-                # Extract separated fields from response
+                # Extract all three fields from response
                 content = chat_response.choices[0].message.content or ""
                 reasoning_content = getattr(chat_response.choices[0].message, 'reasoning_content', None)
                 tool_calls = getattr(chat_response.choices[0].message, 'tool_calls', None)
@@ -157,24 +173,10 @@ class MultiTurnReactAgent(FnCallAgent):
                       f"has_reasoning: {reasoning_content is not None}, "
                       f"has_tool_calls: {tool_calls is not None}")
                 
-                # Check if content has tool calls embedded (for backward compatibility)
-                if '<tool_call>' not in content and tool_calls:
-                    # Convert separated tool_calls format to embedded format for agent logic
-                    for tool_call in tool_calls:
-                        if hasattr(tool_call, 'function'):
-                            tool_name = tool_call.function.name
-                            try:
-                                tool_args = json.loads(tool_call.function.arguments)
-                            except json.JSONDecodeError:
-                                print(f"Warning: Failed to parse tool call arguments: {tool_call.function.arguments}")
-                                tool_args = {}
-                            tool_call_str = json.dumps({"name": tool_name, "arguments": tool_args})
-                            content = content + f"\n<tool_call>\n{tool_call_str}\n</tool_call>"
-                            print(f"--- Converted tool_call to embedded format: {tool_name}")
-                
                 if content and content.strip():
                     print("--- Service call successful, received a valid response ---")
-                    return content.strip(), reasoning_content
+                    # Return all three fields
+                    return content.strip(), reasoning_content, tool_calls
                 else:
                     print(f"Warning: Attempt {attempt + 1} received an empty response.")
 
@@ -194,7 +196,8 @@ class MultiTurnReactAgent(FnCallAgent):
             else:
                 print("Error: All retry attempts have been exhausted. The call has failed.")
         
-        return f"main model server error!!!", "main model server error!!!"
+        # Return error in all three fields
+        return "main model server error!!!", None, None
 
     def count_tokens(self, messages):
         tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path) 
@@ -242,23 +245,76 @@ class MultiTurnReactAgent(FnCallAgent):
                 return result
             round += 1
             num_llm_calls_available -= 1
-            content, reasoning_content = self.call_server(messages, planning_port)
+            
+            # Call server and get all three fields
+            content, reasoning_content, tool_calls_obj = self.call_server(messages, planning_port)
+            
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]
 
-            # Build message with separated fields
+            # Build message with all separated fields for proper preservation
             message_cur = {"role": "assistant", "content": content.strip()}
             
             # Add reasoning_content as separate field if present
             if reasoning_content:
                 message_cur["reasoning_content"] = reasoning_content.strip()
             
-            # Note: tool_calls remain embedded in content for now to maintain compatibility
-            # with downstream agent logic that parses <tool_call> tags
+            # Add tool_calls as separate field if present (for preservation in message history)
+            if tool_calls_obj:
+                # Convert tool_calls objects to dict format for message storage
+                message_cur["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in tool_calls_obj
+                ]
+            
             messages.append(message_cur)
             
-            if '<tool_call>' in content and '</tool_call>' in content:
+            # Execute tool calls if present
+            if tool_calls_obj and len(tool_calls_obj) > 0:
+                # Process the first tool call (typically there's one per turn)
+                tool_call = tool_calls_obj[0]
+                try:
+                    tool_name = tool_call.function.name
+                    tool_args_str = tool_call.function.arguments
+                    
+                    # Parse arguments
+                    try:
+                        tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    
+                    # Handle Python interpreter specially
+                    if "python" in tool_name.lower():
+                        try:
+                            # For Python, arguments might contain code
+                            code_raw = tool_args.get('code', '')
+                            if not code_raw and '<code>' in content:
+                                # Fallback: extract from content if not in args
+                                code_raw = content.split('<code>')[1].split('</code>')[0].strip()
+                            result = TOOL_MAP['PythonInterpreter'].call(code_raw)
+                            used_tools.add('PythonInterpreter')
+                        except Exception as e:
+                            result = f"[Python Interpreter Error]: {str(e)}"
+                    else:
+                        # Regular tool call
+                        result = self.custom_call_tool(tool_name, tool_args)
+                        if tool_name:
+                            used_tools.add(tool_name)
+                
+                except Exception as e:
+                    result = f'Error: Failed to execute tool call - {str(e)}'
+                
+                result = "<tool_response>\n" + result + "\n</tool_response>"
+                messages.append({"role": "user", "content": result})
+            elif '<tool_call>' in content and '</tool_call>' in content:
+                # Fallback: Parse tool call from content if tool_calls_obj not available
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
                     if "python" in tool_call.lower():
@@ -268,7 +324,6 @@ class MultiTurnReactAgent(FnCallAgent):
                             used_tools.add('PythonInterpreter')
                         except:
                             result = "[Python Interpreter Error]: Formatting error."
-
                     else:
                         tool_call = json5.loads(tool_call)
                         tool_name = tool_call.get('name', '')
@@ -276,7 +331,6 @@ class MultiTurnReactAgent(FnCallAgent):
                         result = self.custom_call_tool(tool_name, tool_args)
                         if tool_name:
                             used_tools.add(tool_name)
-
                 except:
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
@@ -295,8 +349,24 @@ class MultiTurnReactAgent(FnCallAgent):
                 print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
                 
                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content = self.call_server(messages, planning_port)
-                messages.append({"role": "assistant", "content": content.strip()})
+                content, reasoning_content, tool_calls_obj = self.call_server(messages, planning_port)
+                
+                # Build final message with all fields
+                final_message = {"role": "assistant", "content": content.strip()}
+                if reasoning_content:
+                    final_message["reasoning_content"] = reasoning_content.strip()
+                if tool_calls_obj:
+                    final_message["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in tool_calls_obj
+                    ]
+                messages.append(final_message)
                 if '<answer>' in content and '</answer>' in content:
                     prediction = messages[-1]['content'].split('<answer>')[1].split('</answer>')[0]
                     termination = 'generate an answer as token limit reached'

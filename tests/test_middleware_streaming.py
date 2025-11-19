@@ -92,6 +92,28 @@ def test_create_completion_helper():
     assert completion.choices[0].message.reasoning_content is None
     assert completion.choices[0].message.tool_calls is None
     print("✓ Completion created with minimal fields")
+    
+    # Test with tool_call in content but tool_calls field present (should remove from content)
+    content_with_toolcall = "Here is response\n<tool_call>\n{\"name\": \"search\", \"arguments\": {}}\n</tool_call>"
+    completion = client._create_completion_from_data(
+        model="test-model",
+        content=content_with_toolcall,
+        tool_calls=[tool_call]
+    )
+    assert "<tool_call>" not in completion.choices[0].message.content, "Tool call tags should be removed from content"
+    assert completion.choices[0].message.tool_calls is not None
+    print("✓ Tool call tags removed from content when tool_calls field present")
+    
+    # Test with tool_call in content but no tool_calls field (should extract)
+    content_with_toolcall = "Here is response\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\"query\": \"test\"}}\n</tool_call>"
+    completion = client._create_completion_from_data(
+        model="test-model",
+        content=content_with_toolcall
+    )
+    assert "<tool_call>" not in completion.choices[0].message.content, "Tool call tags should be extracted from content"
+    assert completion.choices[0].message.tool_calls is not None, "Tool calls should be extracted"
+    assert len(completion.choices[0].message.tool_calls) == 1
+    print("✓ Tool calls extracted from content when no tool_calls field")
 
 
 def test_aggregate_stream_response():
