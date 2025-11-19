@@ -141,33 +141,48 @@ class ChatCompletions:
         """
         Aggregate streaming response chunks into a complete response.
         Returns a dict with aggregated content, tool_calls, and reasoning_content.
+        
+        Handles OpenAI's Server-Sent Events (SSE) format.
         """
         logger.info("Processing streaming response")
         aggregated_content = ""
         aggregated_reasoning = None
         aggregated_tool_calls = []
         tool_call_buffer = {}  # Buffer to accumulate tool call deltas
+        chunk_count = 0
         
         try:
             for line in response.iter_lines():
                 if not line:
                     continue
                 
-                line = line.decode('utf-8').strip()
+                try:
+                    line = line.decode('utf-8').strip()
+                except UnicodeDecodeError as e:
+                    logger.warning(f"Failed to decode line: {e}")
+                    continue
+                
                 if not line.startswith('data: '):
+                    # Skip non-data lines (e.g., event: message)
                     continue
                 
                 data_str = line[6:]  # Remove 'data: ' prefix
                 if data_str == '[DONE]':
+                    logger.debug("Received [DONE] signal")
                     break
                 
+                chunk_count += 1
                 try:
                     chunk = json.loads(data_str)
                     choices = chunk.get('choices', [])
                     if not choices:
+                        logger.debug(f"Chunk {chunk_count}: No choices in chunk")
                         continue
                     
                     delta = choices[0].get('delta', {})
+                    if not delta:
+                        logger.debug(f"Chunk {chunk_count}: Empty delta")
+                        continue
                     
                     # Aggregate content
                     if 'content' in delta and delta['content']:
@@ -218,8 +233,12 @@ class ChatCompletions:
         if tool_call_buffer:
             aggregated_tool_calls = [tool_call_buffer[i] for i in sorted(tool_call_buffer.keys())]
         
-        logger.info(f"Stream aggregation complete - content_len: {len(aggregated_content)}, "
+        logger.info(f"Stream aggregation complete - chunks: {chunk_count}, content_len: {len(aggregated_content)}, "
                    f"tool_calls: {len(aggregated_tool_calls)}, has_reasoning: {aggregated_reasoning is not None}")
+        
+        # Validate we got some content
+        if not aggregated_content and not aggregated_tool_calls:
+            logger.warning("Stream aggregation resulted in empty content and no tool calls")
         
         return {
             'content': aggregated_content,
@@ -261,6 +280,15 @@ class ChatCompletions:
         Returns:
             ChatCompletion object with complete response (aggregated if streaming)
         """
+        # Validate inputs
+        if not model:
+            logger.error("Model parameter is required")
+            raise ValueError("Model parameter cannot be empty")
+        
+        if not messages or not isinstance(messages, list):
+            logger.error(f"Invalid messages parameter: {type(messages)}")
+            raise ValueError("Messages must be a non-empty list")
+        
         logger.info(f"Creating chat completion - model: {model}, stream: {stream}, "
                    f"has_tools: {tools is not None}, messages_count: {len(messages)}")
         
@@ -305,6 +333,21 @@ class ChatCompletions:
                 stream=stream
             )
             response.raise_for_status()
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Request timeout after {self.timeout}s: {e}")
+            raise
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error to {url}: {e}")
+            raise
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error {response.status_code}: {e}")
+            # Try to log response body for debugging
+            try:
+                error_body = response.text[:500]  # First 500 chars
+                logger.error(f"Error response body: {error_body}")
+            except:
+                pass
+            raise
         except requests.exceptions.RequestException as e:
             logger.error(f"Request failed: {e}")
             raise
@@ -438,16 +481,30 @@ class lightllm_ChatCompletions(ChatCompletions):
     def _aggregate_lightllm_stream(self, response: requests.Response) -> str:
         """
         Aggregate streaming response from LightLLM into complete text.
+        
+        Handles various LightLLM streaming formats:
+        - JSON chunks with 'token', 'text', or 'generated_text' fields
+        - Plain text tokens
+        - List responses
         """
         logger.info("Processing LightLLM streaming response")
         aggregated_text = ""
+        chunk_count = 0
         
         try:
             for line in response.iter_lines():
                 if not line:
                     continue
                 
-                line = line.decode('utf-8').strip()
+                chunk_count += 1
+                try:
+                    line = line.decode('utf-8').strip()
+                except UnicodeDecodeError as e:
+                    logger.warning(f"Failed to decode line in chunk {chunk_count}: {e}")
+                    continue
+                
+                if not line:
+                    continue
                 
                 # LightLLM may use different streaming format
                 # Try to parse as JSON first
@@ -456,25 +513,37 @@ class lightllm_ChatCompletions(ChatCompletions):
                     if isinstance(chunk, dict):
                         # Handle dict response
                         if 'token' in chunk:
-                            aggregated_text += chunk['token'].get('text', '')
+                            token_text = chunk['token'].get('text', '')
+                            aggregated_text += token_text
+                            logger.debug(f"Chunk {chunk_count}: Added token text")
                         elif 'generated_text' in chunk:
                             # Some implementations return full text in chunks
                             aggregated_text = chunk['generated_text']
+                            logger.debug(f"Chunk {chunk_count}: Got full generated_text")
                         elif 'text' in chunk:
                             aggregated_text += chunk['text']
+                            logger.debug(f"Chunk {chunk_count}: Added text")
+                        else:
+                            logger.debug(f"Chunk {chunk_count}: Unrecognized dict format: {list(chunk.keys())}")
                     elif isinstance(chunk, list) and len(chunk) > 0:
                         # Handle list response
                         if 'generated_text' in chunk[0]:
                             aggregated_text = chunk[0]['generated_text']
+                            logger.debug(f"Chunk {chunk_count}: Got generated_text from list")
                 except json.JSONDecodeError:
                     # Not JSON, might be plain text tokens
                     aggregated_text += line
+                    logger.debug(f"Chunk {chunk_count}: Added plain text")
         
         except Exception as e:
-            logger.error(f"Error processing LightLLM stream: {e}")
+            logger.error(f"Error processing LightLLM stream at chunk {chunk_count}: {e}")
             raise
         
-        logger.info(f"LightLLM stream aggregation complete - text_len: {len(aggregated_text)}")
+        logger.info(f"LightLLM stream aggregation complete - chunks: {chunk_count}, text_len: {len(aggregated_text)}")
+        
+        if not aggregated_text:
+            logger.warning("LightLLM stream aggregation resulted in empty text")
+        
         return aggregated_text
 
     def create(self, model, 
@@ -501,17 +570,30 @@ class lightllm_ChatCompletions(ChatCompletions):
         - Returns OpenAI-compatible format with separated fields
         - Always returns complete response (aggregates if streaming)
         """
+        # Validate inputs
+        if not model:
+            logger.error("Model parameter is required")
+            raise ValueError("Model parameter cannot be empty")
+        
+        if not messages or not isinstance(messages, list):
+            logger.error(f"Invalid messages parameter: {type(messages)}")
+            raise ValueError("Messages must be a non-empty list")
+        
         logger.info(f"LightLLM create - model: {model}, stream: {stream}, "
                    f"has_tools: {tools is not None}, messages_count: {len(messages)}")
         
         # 使用jinja模板组织输入
-        query = self.template.render(
-            messages=messages,
-            tools=tools if tools else [],
-            enable_thinking=False,
-            today_date=self.today_date()
-        )
-        logger.debug(f"Constructed query with template - query_len: {len(query)}")
+        try:
+            query = self.template.render(
+                messages=messages,
+                tools=tools if tools else [],
+                enable_thinking=False,
+                today_date=self.today_date()
+            )
+            logger.debug(f"Constructed query with template - query_len: {len(query)}")
+        except Exception as e:
+            logger.error(f"Failed to render template: {e}")
+            raise ValueError(f"Template rendering failed: {e}")
         
         # Construct the payload for LightLLM API
         payload = {
@@ -543,6 +625,21 @@ class lightllm_ChatCompletions(ChatCompletions):
                 stream=stream
             )
             response.raise_for_status()
+        except requests.exceptions.Timeout as e:
+            logger.error(f"LightLLM request timeout after {self.timeout}s: {e}")
+            raise
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"LightLLM connection error to {self.base_url}: {e}")
+            raise
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"LightLLM HTTP error {response.status_code}: {e}")
+            # Try to log response body for debugging
+            try:
+                error_body = response.text[:500]
+                logger.error(f"Error response body: {error_body}")
+            except:
+                pass
+            raise
         except requests.exceptions.RequestException as e:
             logger.error(f"LightLLM request failed: {e}")
             raise
@@ -553,14 +650,33 @@ class lightllm_ChatCompletions(ChatCompletions):
             response_text = self._aggregate_lightllm_stream(response)
         else:
             # Parse non-streaming response
-            response_data = response.json()
+            try:
+                response_data = response.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse LightLLM response as JSON: {e}")
+                logger.error(f"Response text: {response.text[:500]}")
+                raise ValueError(f"Invalid JSON response from LightLLM: {e}")
+            
             logger.debug(f"Received LightLLM response: {type(response_data)}")
             
-            # Parse the generated text
-            if isinstance(response_data, list):
-                response_text = response_data[0].get("generated_text", [""])[0]
-            else:
-                response_text = response_data.get("generated_text", [""])[0]
+            # Parse the generated text with error handling
+            try:
+                if isinstance(response_data, list):
+                    if not response_data:
+                        raise ValueError("Empty response list from LightLLM")
+                    generated = response_data[0].get("generated_text", [""])
+                    response_text = generated[0] if isinstance(generated, list) else generated
+                else:
+                    generated = response_data.get("generated_text", [""])
+                    response_text = generated[0] if isinstance(generated, list) else generated
+                
+                if not response_text:
+                    logger.warning("LightLLM returned empty generated_text")
+                    response_text = ""
+            except (KeyError, IndexError, TypeError) as e:
+                logger.error(f"Failed to extract generated_text from response: {e}")
+                logger.error(f"Response structure: {response_data}")
+                raise ValueError(f"Unexpected LightLLM response format: {e}")
         
         # Parse response to extract separated fields
         parsed = self._parse_lightllm_response(response_text)
