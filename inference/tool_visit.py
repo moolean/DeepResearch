@@ -157,7 +157,7 @@ class Visit(BaseTool):
                     webpage_content = response.text
                     return webpage_content
                 else:
-                    print(response.text)
+                    # print(response.text)
                     raise ValueError("jina readpage error")
             except Exception as e:
                 time.sleep(0.5)
@@ -171,7 +171,7 @@ class Visit(BaseTool):
         for attempt in range(max_attempts):
             content = self.jina_readpage(url)
             service = "jina"     
-            print(service)
+            # print(service)
             if content and not content.startswith("[visit] Failed to read page.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
                 return content
         return "[visit] Failed to read page."

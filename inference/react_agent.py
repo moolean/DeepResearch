@@ -3,15 +3,12 @@ import json5
 import os
 from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
 from qwen_agent.llm.schema import Message
-from qwen_agent.utils.utils import build_text_completion_prompt
 from transformers import AutoTokenizer 
-from datetime import datetime
 from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm import BaseChatModel
 from qwen_agent.llm.schema import ASSISTANT, DEFAULT_SYSTEM_MESSAGE, Message
 from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools import BaseTool
-from qwen_agent.utils.utils import format_as_text_message, merge_generate_cfgs
 from prompt import *
 import time
 import asyncio
@@ -19,11 +16,12 @@ import asyncio
 # Import middleware or OpenAI based on configuration
 USE_MIDDLEWARE = os.getenv('USE_OPENAI_MIDDLEWARE', 'false').lower() == 'true'
 if USE_MIDDLEWARE:
-    from openai_middleware import OpenAICompatibleClient as OpenAI
+    from openai_middleware import OpenAICompatibleClient as OpenAI_requests
     from openai_middleware import LightLLMClient as OpenAI_LightLLM
     from openai_middleware import APIError, APIConnectionError, APITimeoutError
 else:
-    from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
+    pass
+    # from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
 from tool_file import *
 from tool_scholar import *
@@ -123,13 +121,13 @@ class MultiTurnReactAgent(FnCallAgent):
             client = OpenAI_LightLLM(
                 api_key=openai_api_key,
                 base_url=openai_api_base,
-                timeout=600.0
+                timeout=6000.0
             )
         else:
-            client = OpenAI(
+            client = OpenAI_requests(
                     api_key=openai_api_key,
                     base_url=openai_api_base,
-                    timeout=600.0,
+                    timeout=6000.0,
             )
         tools = self.get_tools_for_api()
         base_sleep_time = 1 
@@ -143,19 +141,16 @@ class MultiTurnReactAgent(FnCallAgent):
                     stop=["\n<tool_response>", "<tool_response>"],
                     temperature=self.llm_generate_cfg.get('temperature', 0.6),
                     top_p=self.llm_generate_cfg.get('top_p', 0.95),
-                    logprobs=True,
+                    logprobs=False,
                     max_tokens=10000,
                     presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1),
                     tools=tools
                 )
-                content = chat_response.choices[0].message.content
 
-                # OpenRouter provides API calling. If you want to use OpenRouter, you need to uncomment line 89 - 90.
-                # reasoning_content = "<think>\n" + chat_response.choices[0].message.reasoning.strip() + "\n</think>"
-                # content = reasoning_content + content
-                
+                content = chat_response.choices[0].message.content
+                reasoning_content = getattr(chat_response.choices[0].message, 'reasoning_content', None)
                 # Check if content has tool calls first, if not check response.tool_calls
-                if content and '<tool_call>' not in content:
+                if '<tool_call>' not in content:
                     # No tool call in content, check if OpenAI returned tool_calls
                     tool_calls = getattr(chat_response.choices[0].message, 'tool_calls', None)
                     if tool_calls:
@@ -166,16 +161,17 @@ class MultiTurnReactAgent(FnCallAgent):
                                 tool_args = json.loads(tool_call.function.arguments)
                                 tool_call_str = json.dumps({"name": tool_name, "arguments": tool_args})
                                 content = content + f"\n<tool_call>\n{tool_call_str}\n</tool_call>"
-                
                 if content and content.strip():
                     print("--- Service call successful, received a valid response ---")
-                    return content.strip()
+                    return content.strip(), reasoning_content
                 else:
                     print(f"Warning: Attempt {attempt + 1} received an empty response.")
 
             except (APIError, APIConnectionError, APITimeoutError) as e:
                 print(f"Error: Attempt {attempt + 1} failed with an API or network error: {e}")
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 print(f"Error: Attempt {attempt + 1} failed with an unexpected error: {e}")
 
             if attempt < max_tries - 1:
@@ -187,7 +183,7 @@ class MultiTurnReactAgent(FnCallAgent):
             else:
                 print("Error: All retry attempts have been exhausted. The call has failed.")
         
-        return f"main model server error!!!"
+        return f"main model server error!!!", "main model server error!!!"
 
     def count_tokens(self, messages):
         tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path) 
@@ -235,11 +231,16 @@ class MultiTurnReactAgent(FnCallAgent):
                 return result
             round += 1
             num_llm_calls_available -= 1
-            content = self.call_server(messages, planning_port)
+            content, reasoning_content = self.call_server(messages, planning_port)
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
                 content = content[:pos]
-            messages.append({"role": "assistant", "content": content.strip()})
+
+            message_cur = {"role": "assistant", "content": content.strip()}
+            if reasoning_content:
+                message_cur["reasoning_content"] = reasoning_content.strip()
+            messages.append(message_cur)
+            
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
@@ -262,7 +263,6 @@ class MultiTurnReactAgent(FnCallAgent):
                 except:
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
-                # print(result)
                 messages.append({"role": "user", "content": result})
             if '<answer>' in content and '</answer>' in content:
                 termination = 'answer'

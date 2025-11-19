@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 
 class ChatCompletionMessage:
     """Mimics OpenAI's ChatCompletionMessage structure"""
-    def __init__(self, content: str, role: str = "assistant", tool_calls: Optional[List[Dict]] = None):
+    def __init__(self, content: str, 
+                 reasoning_content: Optional[str] = None,
+                 role: str = "assistant", 
+                 tool_calls: Optional[List[Dict]] = None):
         self.content = content
+        self.reasoning_content = reasoning_content
         self.role = role
         self.tool_calls = tool_calls
 
@@ -43,7 +47,16 @@ class ChatCompletion:
         self.created = int(time.time())
         self.model = "unknown"
 
-
+class ToolCallFunction:
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+                
+class ToolCall:
+    def __init__(self, id: str, type: str, function: ToolCallFunction):
+        self.id = id
+        self.type = type
+        self.function = function
 
 
 
@@ -87,6 +100,7 @@ class ChatCompletions:
         Returns:
             ChatCompletion object with response
         """
+        
         # Construct the request payload in OpenAI format
         payload = {
             "model": model,
@@ -95,19 +109,20 @@ class ChatCompletions:
             "top_p": top_p,
             "max_tokens": max_tokens,
             "presence_penalty": presence_penalty,
+            "stream": False
         }
         
-        if stop:
-            payload["stop"] = stop
+        # if stop:
+        #     payload["stop"] = stop
         
-        if logprobs:
-            payload["logprobs"] = True
+        # if logprobs:
+        #     payload["logprobs"] = False
         
         if tools:
             payload["tools"] = tools
         
         # Add any additional kwargs
-        payload.update(kwargs)
+        # payload.update(kwargs)
         
         # Prepare headers
         headers = {
@@ -117,12 +132,13 @@ class ChatCompletions:
         
         # Make the request using requests library
         url = f"{self.base_url}/chat/completions"
-        
+        # print("Request payload:", json.dumps(payload, indent=2))
         response = requests.post(
             url,
             headers=headers,
             json=payload,
             timeout=self.timeout
+            
         )
         
         # Raise exception for bad status codes
@@ -130,19 +146,31 @@ class ChatCompletions:
         
         # Parse the response
         response_data = response.json()
-        
         # Convert response to OpenAI-compatible format
         choices = []
         for choice_data in response_data.get("choices", []):
             message_data = choice_data.get("message", {})
+            tool_calls = message_data.get("tool_calls", [])
+            if tool_calls and isinstance(tool_calls[0], dict):
+                # 转为对象格式
+                tool_calls = [
+                    ToolCall(
+                        id=tc.get("id", ""),
+                        type=tc.get("type", ""),
+                        function=ToolCallFunction(
+                            name=tc.get("function", {}).get("name", ""),
+                            arguments=tc.get("function", {}).get("arguments", "")
+                        )
+                    ) for tc in tool_calls
+                ]
             message = ChatCompletionMessage(
+                reasoning_content=message_data.get("reasoning_content", None),
                 content=message_data.get("content", ""),
                 role=message_data.get("role", "assistant"),
-                tool_calls=message_data.get("tool_calls")
+                tool_calls=tool_calls
             )
             choice = ChatCompletionChoice(message=message, index=choice_data.get("index", 0))
             choices.append(choice)
-        
         return ChatCompletion(choices=choices)
 
 class lightllm_ChatCompletions(ChatCompletions):
@@ -189,10 +217,10 @@ class lightllm_ChatCompletions(ChatCompletions):
         query =  self.template.render(
             messages=messages,
             tools=tools if tools else [],
-            enable_thinking=True,
+            enable_thinking=False,
             today_date=self.today_date()
         )
-
+        # print("Constructed query:", query)
         # Construct the payload for LightLLM API
         payload = {
             "inputs": query,
@@ -229,6 +257,9 @@ class lightllm_ChatCompletions(ChatCompletions):
         else:
             response_text = response_data.get("generated_text", [""])[0]
         
+        reasoning_content = re.compile(r"<think>\n(.*?)\n</think>", re.DOTALL).search(response_text)
+        reasoning_content = reasoning_content.group(1).strip() if reasoning_content else None
+
         # Parse tool calls from response
         toolcall_pattern = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
         toolcalls_matches = toolcall_pattern.findall(response_text)
@@ -240,20 +271,22 @@ class lightllm_ChatCompletions(ChatCompletions):
             for i, toolcall_str in enumerate(toolcalls_matches):
                 try:
                     toolcall_json = json.loads(toolcall_str)
-                    tool_call = {
-                        "id": f"call_{i}_{int(time.time())}",
-                        "type": "function",
-                        "function": {
-                            "name": toolcall_json.get("name", ""),
-                            "arguments": json.dumps(toolcall_json.get("arguments", {}))
-                        }
-                    }
+                    function = ToolCallFunction(
+                        name=toolcall_json.get("name", ""),
+                        arguments=json.dumps(toolcall_json.get("arguments", {}))
+                    )
+                    tool_call = ToolCall(
+                        id=f"call_{i}_{int(time.time())}",
+                        type="function",
+                        function=function
+                    )
                     tool_calls_list.append(tool_call)
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse tool call: {toolcall_str}")
         
         # Create OpenAI-compatible response
         message = ChatCompletionMessage(
+            reasoning_content=reasoning_content,
             content=response_text,
             role="assistant",
             tool_calls=tool_calls_list
