@@ -278,41 +278,49 @@ class MultiTurnReactAgent(FnCallAgent):
             
             # Execute tool calls if present
             if tool_calls_obj and len(tool_calls_obj) > 0:
-                # Process the first tool call (typically there's one per turn)
-                tool_call = tool_calls_obj[0]
-                try:
+                # Process each tool call and append results with proper tool_call_id
+                for tool_call in tool_calls_obj:
+                    # Extract metadata first to ensure they're always available
+                    tool_call_id = tool_call.id
                     tool_name = tool_call.function.name
                     tool_args_str = tool_call.function.arguments
                     
-                    # Parse arguments
                     try:
-                        tool_args = json.loads(tool_args_str) if tool_args_str else {}
-                    except json.JSONDecodeError:
-                        tool_args = {}
-                    
-                    # Handle Python interpreter specially
-                    if "python" in tool_name.lower():
+                        # Parse arguments
                         try:
-                            # For Python, arguments might contain code
-                            code_raw = tool_args.get('code', '')
-                            if not code_raw and '<code>' in content:
-                                # Fallback: extract from content if not in args
-                                code_raw = content.split('<code>')[1].split('</code>')[0].strip()
-                            result = TOOL_MAP['PythonInterpreter'].call(code_raw)
-                            used_tools.add('PythonInterpreter')
-                        except Exception as e:
-                            result = f"[Python Interpreter Error]: {str(e)}"
-                    else:
-                        # Regular tool call
-                        result = self.custom_call_tool(tool_name, tool_args)
-                        if tool_name:
-                            used_tools.add(tool_name)
-                
-                except Exception as e:
-                    result = f'Error: Failed to execute tool call - {str(e)}'
-                
-                result = "<tool_response>\n" + result + "\n</tool_response>"
-                messages.append({"role": "user", "content": result})
+                            tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                        except json.JSONDecodeError:
+                            tool_args = {}
+                        
+                        # Handle Python interpreter specially
+                        if "python" in tool_name.lower():
+                            try:
+                                # For Python, arguments might contain code
+                                code_raw = tool_args.get('code', '')
+                                if not code_raw and '<code>' in content:
+                                    # Fallback: extract from content if not in args
+                                    code_raw = content.split('<code>')[1].split('</code>')[0].strip()
+                                result = TOOL_MAP['PythonInterpreter'].call(code_raw)
+                                used_tools.add('PythonInterpreter')
+                            except Exception as e:
+                                result = f"[Python Interpreter Error]: {str(e)}"
+                        else:
+                            # Regular tool call
+                            result = self.custom_call_tool(tool_name, tool_args)
+                            if tool_name:
+                                used_tools.add(tool_name)
+                    
+                    except Exception as e:
+                        result = f'Error: Failed to execute tool call - {str(e)}'
+                    
+                    result = "<tool_response>\n" + result + "\n</tool_response>"
+                    # Use proper OpenAI format with role "tool" and include tool_call_id
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": result
+                    })
             elif '<tool_call>' in content and '</tool_call>' in content:
                 # Fallback: Parse tool call from content if tool_calls_obj not available
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
