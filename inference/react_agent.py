@@ -160,7 +160,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     logprobs=False,
                     max_tokens=10000,
                     presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1),
-                    tools=tools
+                    tools=tools,
+                    stream=self.llm_generate_cfg.get('stream', False)
                 )
 
                 # Extract all three fields from response
@@ -173,7 +174,7 @@ class MultiTurnReactAgent(FnCallAgent):
                       f"has_reasoning: {reasoning_content is not None}, "
                       f"has_tool_calls: {tool_calls is not None}")
                 
-                if content and content.strip():
+                if (content and content.strip()) or reasoning_content is not None or tool_calls is not None:
                     print("--- Service call successful, received a valid response ---")
                     # Return all three fields
                     return content.strip(), reasoning_content, tool_calls

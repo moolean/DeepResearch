@@ -345,7 +345,7 @@ class ChatCompletions:
         
         logger.info(f"Creating chat completion - model: {model}, stream: {stream}, "
                    f"has_tools: {tools is not None}, messages_count: {len(messages)}")
-        
+
         # Construct the request payload in OpenAI format
         payload = {
             "model": model,
@@ -367,7 +367,9 @@ class ChatCompletions:
         if tools:
             payload["tools"] = tools
             logger.debug(f"Added {len(tools)} tools to request")
-        
+        print("="*10)
+        print("input payload:", payload)
+        print("="*10)
         # Prepare headers
         headers = {
             "Content-Type": "application/json",
