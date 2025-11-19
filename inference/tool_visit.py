@@ -101,6 +101,16 @@ class Visit(BaseTool):
         return response.strip()
         
     def call_server(self, msgs, max_retries=2):
+        """
+        Standard OpenAI API call with retry and error handling.
+        
+        Args:
+            msgs: List of message dicts in OpenAI format (with role, content, reasoning_content, tool_calls)
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            dict: Response with 'content', 'reasoning_content', and 'tool_calls' fields
+        """
         api_key = os.environ.get("API_KEY")
         url_llm = os.environ.get("API_BASE")
         model_name = os.environ.get("SUMMARY_MODEL_NAME", "")
@@ -108,6 +118,7 @@ class Visit(BaseTool):
             api_key=api_key,
             base_url=url_llm,
         )
+        
         for attempt in range(max_retries):
             try:
                 chat_response = client.chat.completions.create(
@@ -115,21 +126,30 @@ class Visit(BaseTool):
                     messages=msgs,
                     temperature=0.7
                 )
-                content = chat_response.choices[0].message.content
-                if content:
-                    try:
-                        json.loads(content)
-                    except:
-                        # extract json from string 
-                        left = content.find('{')
-                        right = content.rfind('}') 
-                        if left != -1 and right != -1 and left <= right: 
-                            content = content[left:right+1]
-                    return content
+                
+                message = chat_response.choices[0].message
+                
+                # Extract response fields
+                content = message.content or ""
+                reasoning_content = getattr(message, 'reasoning_content', None) or ""
+                tool_calls = getattr(message, 'tool_calls', None)
+                
+                # Return standardized response
+                return {
+                    'content': content,
+                    'reasoning_content': reasoning_content,
+                    'tool_calls': tool_calls
+                }
+                
             except Exception as e:
-                # print(e)
+                print(f"[call_server] Error on attempt {attempt + 1}/{max_retries}: {str(e)}")
                 if attempt == (max_retries - 1):
-                    return ""
+                    # Return empty response on final failure
+                    return {
+                        'content': '',
+                        'reasoning_content': '',
+                        'tool_calls': None
+                    }
                 continue
 
     async def direct_fetch_url(self, url: str, max_retries: int = 3, retry_delay: float = 2.0) -> Tuple[Optional[str], Optional[str]]:
@@ -364,7 +384,8 @@ class Visit(BaseTool):
             content = truncate_to_tokens(content, max_tokens=95000)
             messages = [{"role":"user","content": EXTRACTOR_PROMPT.format(webpage_content=content, goal=goal)}]
             parse_retry_times = 0
-            raw = summary_page_func(messages, max_retries=max_retries)
+            response = summary_page_func(messages, max_retries=max_retries)
+            raw = response.get('content', '') if isinstance(response, dict) else response
             summary_retries = 3
             while len(raw) < 10 and summary_retries >= 0:
                 truncate_length = int(0.7 * len(content)) if summary_retries > 0 else 25000
@@ -384,7 +405,8 @@ class Visit(BaseTool):
                     goal=goal
                 )
                 messages = [{"role": "user", "content": extraction_prompt}]
-                raw = summary_page_func(messages, max_retries=max_retries)
+                response = summary_page_func(messages, max_retries=max_retries)
+                raw = response.get('content', '') if isinstance(response, dict) else response
                 summary_retries -= 1
 
             parse_retry_times = 2
@@ -395,7 +417,8 @@ class Visit(BaseTool):
                     raw = json.loads(raw)
                     break
                 except:
-                    raw = summary_page_func(messages, max_retries=max_retries)
+                    response = summary_page_func(messages, max_retries=max_retries)
+                    raw = response.get('content', '') if isinstance(response, dict) else response
                     parse_retry_times += 1
             
             if parse_retry_times >= 3:

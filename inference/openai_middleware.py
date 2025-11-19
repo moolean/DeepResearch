@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 class ChatCompletionMessage:
     """Mimics OpenAI's ChatCompletionMessage structure"""
-    def __init__(self, content: str, role: str = "assistant", tool_calls: Optional[List[Dict]] = None):
+    def __init__(self, content: str, role: str = "assistant", tool_calls: Optional[List[Dict]] = None, reasoning_content: Optional[str] = None):
         self.content = content
         self.role = role
         self.tool_calls = tool_calls
+        self.reasoning_content = reasoning_content
 
 
 class ChatCompletionChoice:
@@ -135,10 +136,45 @@ class ChatCompletions:
         choices = []
         for choice_data in response_data.get("choices", []):
             message_data = choice_data.get("message", {})
+            content = message_data.get("content", "")
+            tool_calls = message_data.get("tool_calls")
+            reasoning_content = message_data.get("reasoning_content", "")
+            
+            # Check if content has tool_call tags but no tool_calls field
+            if not tool_calls and "<tool_call>" in content:
+                # Parse tool_calls from content
+                import re
+                toolcall_pattern = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+                toolcalls_matches = toolcall_pattern.findall(content)
+                
+                if toolcalls_matches:
+                    tool_calls = []
+                    for i, toolcall_str in enumerate(toolcalls_matches):
+                        try:
+                            toolcall_json = json.loads(toolcall_str)
+                            tool_call = {
+                                "id": f"call_{i}_{int(time.time())}",
+                                "type": "function",
+                                "function": {
+                                    "name": toolcall_json.get("name", ""),
+                                    "arguments": json.dumps(toolcall_json.get("arguments", {}))
+                                }
+                            }
+                            tool_calls.append(tool_call)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse tool call from content: {toolcall_str}")
+            
+            # If tool_calls field is present, remove tool_call tags from content
+            if tool_calls:
+                import re
+                content = re.sub(r"<tool_call>\s*\{.*?\}\s*</tool_call>", "", content, flags=re.DOTALL)
+                content = content.strip()
+            
             message = ChatCompletionMessage(
-                content=message_data.get("content", ""),
+                content=content,
                 role=message_data.get("role", "assistant"),
-                tool_calls=message_data.get("tool_calls")
+                tool_calls=tool_calls,
+                reasoning_content=reasoning_content
             )
             choice = ChatCompletionChoice(message=message, index=choice_data.get("index", 0))
             choices.append(choice)
@@ -252,9 +288,15 @@ class lightllm_ChatCompletions(ChatCompletions):
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse tool call: {toolcall_str}")
         
+        # If tool_calls are found, remove tool_call tags from content
+        content_text = response_text
+        if tool_calls_list:
+            content_text = re.sub(r"<tool_call>\s*\{.*?\}\s*</tool_call>", "", response_text, flags=re.DOTALL)
+            content_text = content_text.strip()
+        
         # Create OpenAI-compatible response
         message = ChatCompletionMessage(
-            content=response_text,
+            content=content_text,
             role="assistant",
             tool_calls=tool_calls_list
         )
