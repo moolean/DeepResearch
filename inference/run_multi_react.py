@@ -14,9 +14,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="")
     parser.add_argument("--model_name", type=str, default="")
+    parser.add_argument("--version", type=str, default="")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--dataset", type=str, default="gaia")
     parser.add_argument("--temperature", type=float, default=0.6)
+    parser.add_argument("--stream", type=bool, default=False)
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--presence_penalty", type=float, default=1.1)
     parser.add_argument("--max_workers", type=int, default=20)
@@ -37,8 +39,9 @@ if __name__ == "__main__":
         exit(1)
 
     model_name = args.model_name if args.model_name else os.path.basename(model_path.rstrip('/'))
-
-    model_dir = os.path.join(output_base, model_name)
+    version = args.version if args.version else "default"
+    
+    model_dir = os.path.join(output_base, f"{model_name}_{version}")
     dataset_dir = os.path.join(model_dir, os.path.basename(args.dataset).replace('.jsonl', '').replace('.json', ''))
 
     os.makedirs(dataset_dir, exist_ok=True)
@@ -160,7 +163,8 @@ if __name__ == "__main__":
                 'max_retries': 10,
                 'temperature': args.temperature,
                 'top_p': args.top_p,
-                'presence_penalty': args.presence_penalty
+                'presence_penalty': args.presence_penalty,
+                'stream': args.stream
             },
             'model_type': 'qwen_dashscope'
         }
