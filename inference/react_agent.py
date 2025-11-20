@@ -33,6 +33,7 @@ OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv('MAX_LLM_CALL_PER_RUN', 100))
+OMIT_TOOL_RESPONSE_ROUNDS = int(os.getenv('OMIT_TOOL_RESPONSE_ROUNDS', 0))
 
 # Map tool names to their classes
 ALL_TOOLS = {
@@ -207,6 +208,50 @@ class MultiTurnReactAgent(FnCallAgent):
         token_count = len(tokens["input_ids"][0])
         
         return token_count
+    
+    def omit_old_tool_responses(self, messages: List[dict], keep_rounds: int) -> List[dict]:
+        """
+        Replace tool response content in messages older than K rounds with a placeholder.
+        
+        Args:
+            messages: List of message dictionaries
+            keep_rounds: Number of recent rounds to keep full tool responses for
+        
+        Returns:
+            Modified list of messages with old tool responses omitted
+        """
+        if keep_rounds <= 0:
+            return messages
+        
+        # Create a deep copy to avoid modifying the original
+        messages_copy = []
+        for msg in messages:
+            messages_copy.append(msg.copy())
+        
+        # Find all tool response messages (role="tool" or role="user" with tool_response tags)
+        tool_response_indices = []
+        for i, msg in enumerate(messages_copy):
+            if msg.get("role") == "tool":
+                tool_response_indices.append(i)
+            elif msg.get("role") == "user" and OBS_START in msg.get("content", ""):
+                tool_response_indices.append(i)
+        
+        # Calculate how many tool responses to omit (all except the last keep_rounds)
+        num_to_omit = max(0, len(tool_response_indices) - keep_rounds)
+        
+        # Replace content of old tool responses
+        for i in range(num_to_omit):
+            idx = tool_response_indices[i]
+            msg = messages_copy[idx]
+            
+            if msg.get("role") == "tool":
+                # For role="tool" messages, replace the content
+                messages_copy[idx]["content"] = "<tool_response>\ntool response omitted\n</tool_response>"
+            elif msg.get("role") == "user":
+                # For role="user" with tool_response tags, replace the content
+                messages_copy[idx]["content"] = "<tool_response>\ntool response omitted\n</tool_response>"
+        
+        return messages_copy
 
     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:
         self.model=model
@@ -247,8 +292,13 @@ class MultiTurnReactAgent(FnCallAgent):
             round += 1
             num_llm_calls_available -= 1
             
+            # Apply tool response omission if configured
+            messages_to_send = messages
+            if OMIT_TOOL_RESPONSE_ROUNDS > 0:
+                messages_to_send = self.omit_old_tool_responses(messages, OMIT_TOOL_RESPONSE_ROUNDS)
+            
             # Call server and get all three fields
-            content, reasoning_content, tool_calls_obj = self.call_server(messages, planning_port)
+            content, reasoning_content, tool_calls_obj = self.call_server(messages_to_send, planning_port)
             
             if '<tool_response>' in content:
                 pos = content.find('<tool_response>')
@@ -358,7 +408,13 @@ class MultiTurnReactAgent(FnCallAgent):
                 print(f"Token quantity exceeds the limit: {token_count} > {max_tokens}")
                 
                 messages[-1]['content'] = "You have now reached the maximum context length you can handle. You should stop making tool calls and, based on all the information above, think again and provide what you consider the most likely answer in the following format:<think>your final thinking</think>\n<answer>your answer</answer>"
-                content, reasoning_content, tool_calls_obj = self.call_server(messages, planning_port)
+                
+                # Apply tool response omission if configured
+                messages_to_send_final = messages
+                if OMIT_TOOL_RESPONSE_ROUNDS > 0:
+                    messages_to_send_final = self.omit_old_tool_responses(messages, OMIT_TOOL_RESPONSE_ROUNDS)
+                
+                content, reasoning_content, tool_calls_obj = self.call_server(messages_to_send_final, planning_port)
                 
                 # Build final message with all fields
                 final_message = {"role": "assistant", "content": content.strip()}
