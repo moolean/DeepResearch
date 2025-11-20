@@ -59,6 +59,41 @@ class TestDirectFetch(unittest.TestCase):
         print(f"✓ Domain extraction works: {domain}")
 
 
+class TestJinaSearchEndpoint(unittest.TestCase):
+    """Test Jina search endpoint functionality"""
+    
+    @patch.dict(os.environ, {'ENABLE_SUMMARY': 'false', 'USE_DIRECT_FETCH': 'false', 'JINA_API_KEYS': 'test_key'})
+    def test_jina_search_endpoint_used(self):
+        """Test that jina_search endpoint is used when ENABLE_SUMMARY is false"""
+        # Reload module to pick up env var
+        import importlib
+        import tool_visit
+        importlib.reload(tool_visit)
+        
+        visit_tool = tool_visit.Visit()
+        
+        # Mock requests.get to verify the correct endpoint is called
+        with patch('tool_visit.requests.get') as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.text = "Search results from Jina"
+            mock_get.return_value = mock_response
+            
+            result = visit_tool.html_readpage_jina("https://example.com")
+            
+            # Verify requests.get was called
+            self.assertTrue(mock_get.called, "requests.get should be called")
+            
+            # Verify the correct URL was used
+            call_args = mock_get.call_args
+            called_url = call_args[0][0]
+            self.assertIn("s.jina.ai", called_url, "Should use search endpoint (s.jina.ai)")
+            self.assertIn("?q=", called_url, "Should have query parameter")
+            
+            print("✓ Jina search endpoint is used when ENABLE_SUMMARY is false")
+            print(f"  URL used: {called_url}")
+
+
 class TestNoSummaryMode(unittest.TestCase):
     """Test no-summary mode functionality"""
     
@@ -221,6 +256,7 @@ def run_tests():
     
     # Add all test classes
     suite.addTests(loader.loadTestsFromTestCase(TestDirectFetch))
+    suite.addTests(loader.loadTestsFromTestCase(TestJinaSearchEndpoint))
     suite.addTests(loader.loadTestsFromTestCase(TestNoSummaryMode))
     suite.addTests(loader.loadTestsFromTestCase(TestToolResponseOmission))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))

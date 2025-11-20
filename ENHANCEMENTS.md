@@ -59,7 +59,7 @@ def direct_fetch_url(self, url: str, max_retries: int = 3) -> str:
 ## 2. No-Summary Mode
 
 ### Description
-The Visit tool can now return raw webpage content without invoking the LLM-based summarization, similar to how Jina search works.
+The Visit tool can now return raw webpage content without invoking the LLM-based summarization. When disabled, it automatically switches to use Jina's search endpoint (`https://s.jina.ai`) instead of the reader endpoint (`https://r.jina.ai`), providing search-optimized results.
 
 ### Environment Variable
 ```bash
@@ -67,6 +67,7 @@ ENABLE_SUMMARY=false  # Disable LLM summarization (default: true)
 ```
 
 ### Features
+- **Automatic Endpoint Switching**: Uses Jina search endpoint (`s.jina.ai/?q={url}`) when summary is disabled
 - **Full Content Preservation**: Returns complete webpage text without truncation
 - **Cost Reduction**: Skips expensive LLM API calls for summarization
 - **Lower Latency**: No waiting for summary model response
@@ -92,6 +93,24 @@ The information from {url} for user goal '{goal}' as follows:
 ### Implementation Details
 ```python
 # In tool_visit.py
+
+# New method for Jina search endpoint
+def jina_search(self, url: str) -> str:
+    """Search using Jina search service."""
+    response = requests.get(
+        f"https://s.jina.ai/?q={url}",
+        headers={"Authorization": f"Bearer {JINA_API_KEYS}"},
+        timeout=50
+    )
+    return response.text
+
+# Modified html_readpage_jina to use search endpoint when ENABLE_SUMMARY=false
+if not ENABLE_SUMMARY:
+    content = self.jina_search(url)  # Use search endpoint instead of reader
+else:
+    content = self.jina_readpage(url)  # Use reader endpoint with summary
+
+# Format output when ENABLE_SUMMARY=false
 if not ENABLE_SUMMARY:
     content_cleaned = self.remove_text_links(content)
     content_cleaned = content_cleaned[:WEBCONTENT_MAXLENGTH]
