@@ -28,6 +28,8 @@ from tool_scholar import *
 from tool_python import *
 from tool_search import *
 from tool_visit import *
+from tool_fetch_url import *
+from tool_browse import *
 
 OBS_START = '<tool_response>'
 OBS_END = '\n</tool_response>'
@@ -40,13 +42,15 @@ ALL_TOOLS = {
     'parse_file': FileParser(),
     'google_scholar': Scholar(),
     'visit': Visit(),
+    'fetch_url': FetchUrl(),
+    'browse': Browse(),
     'search': Search(),
     'PythonInterpreter': PythonInterpreter(),
 }
 
 def get_enabled_tools():
     """Get the list of enabled tools from environment variable."""
-    enabled_tools_env = os.getenv('ENABLED_TOOLS', 'search,visit,google_scholar,PythonInterpreter,parse_file')
+    enabled_tools_env = os.getenv('ENABLED_TOOLS', 'search,visit,fetch_url,browse,google_scholar,PythonInterpreter,parse_file')
     enabled_tools = [tool.strip() for tool in enabled_tools_env.split(',')]
     return enabled_tools
 
