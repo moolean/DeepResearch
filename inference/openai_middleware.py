@@ -212,6 +212,7 @@ class ChatCompletions:
                 
                 try:
                     line = line.decode('utf-8').strip()
+                    
                 except UnicodeDecodeError as e:
                     logger.warning(f"Failed to decode line: {e}")
                     continue

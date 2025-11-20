@@ -343,14 +343,18 @@ def calculate_enhanced_statistics(round_results, round_items):
     enhanced_stats = {}
     correct_tool_calls = []
     correct_assistant_tokens = []
+    correct_total_tokens = []
+    failed_tool_calls = []
+    failed_assistant_tokens = []
+    failed_total_tokens = []
     
     for round_name in round_results.keys():
         results = round_results[round_name]
         items = round_items[round_name]
 
         for result in results:
-            if not is_correct_judgement(result["judgement"]):
-                continue
+            is_correct = is_correct_judgement(result["judgement"])
+            
             try:
                 matching_item = [item for item in items if item['messages'][1]['content'] == result['question']]
             except:
@@ -363,8 +367,12 @@ def calculate_enhanced_statistics(round_results, round_items):
             messages = item["messages"]
             num_tool_use = 0
             question_assistant_tokens = 0
+            total_tokens = 0
             
+            # Calculate total tokens for all messages
             for msg in messages:
+                total_tokens += count_tokens_with_tokenizer(msg['content'], tokenizer)
+                
                 if msg['role'] == 'assistant':
                     content = msg['content']
 
@@ -375,15 +383,29 @@ def calculate_enhanced_statistics(round_results, round_items):
                     assistant_tokens = count_tokens_with_tokenizer(think_content, tokenizer)
                     question_assistant_tokens += assistant_tokens
             
-            correct_tool_calls.append(num_tool_use)
-            correct_assistant_tokens.append(question_assistant_tokens)
+            if is_correct:
+                correct_tool_calls.append(num_tool_use)
+                correct_assistant_tokens.append(question_assistant_tokens)
+                correct_total_tokens.append(total_tokens)
+            else:
+                failed_tool_calls.append(num_tool_use)
+                failed_assistant_tokens.append(question_assistant_tokens)
+                failed_total_tokens.append(total_tokens)
         
     avg_tool_calls_correct = sum(correct_tool_calls) / len(correct_tool_calls) if correct_tool_calls else 0
     avg_assistant_tokens_correct = sum(correct_assistant_tokens) / len(correct_assistant_tokens) if correct_assistant_tokens else 0
+    avg_total_tokens_correct = sum(correct_total_tokens) / len(correct_total_tokens) if correct_total_tokens else 0
+    avg_tool_calls_failed = sum(failed_tool_calls) / len(failed_tool_calls) if failed_tool_calls else 0
+    avg_assistant_tokens_failed = sum(failed_assistant_tokens) / len(failed_assistant_tokens) if failed_assistant_tokens else 0
+    avg_total_tokens_failed = sum(failed_total_tokens) / len(failed_total_tokens) if failed_total_tokens else 0
 
     return {
         "avg_tool_calls_per_question_correctly_solved": round(avg_tool_calls_correct, 3),
-        "avg_assistant_tokens_per_question_correctly_solved": round(avg_assistant_tokens_correct, 3)
+        "avg_assistant_tokens_per_question_correctly_solved": round(avg_assistant_tokens_correct, 3),
+        "avg_total_tokens_per_question_correctly_solved": round(avg_total_tokens_correct, 3),
+        "avg_tool_calls_per_question_failed": round(avg_tool_calls_failed, 3),
+        "avg_assistant_tokens_per_question_failed": round(avg_assistant_tokens_failed, 3),
+        "avg_total_tokens_per_question_failed": round(avg_total_tokens_failed, 3)
     }
         
         
