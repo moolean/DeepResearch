@@ -215,6 +215,42 @@ class Visit(BaseTool):
         except:
             return url
 
+    def jina_search(self, url: str) -> str:
+        """
+        Search using Jina search service.
+        
+        Args:
+            url: The URL to search for
+            
+        Returns:
+            str: The search results or error message
+        """
+        max_retries = 3
+        timeout = 50
+        
+        for attempt in range(max_retries):
+            headers = {
+                "Authorization": f"Bearer {JINA_API_KEYS}",
+            }
+            try:
+                response = requests.get(
+                    f"https://s.jina.ai/?q={url}",
+                    headers=headers,
+                    timeout=timeout
+                )
+                if response.status_code == 200:
+                    search_content = response.text
+                    return search_content
+                else:
+                    # print(response.text)
+                    raise ValueError("jina search error")
+            except Exception as e:
+                time.sleep(0.5)
+                if attempt == max_retries - 1:
+                    return "[visit] Failed to search."
+                
+        return "[visit] Failed to search."
+
     def jina_readpage(self, url: str) -> str:
         """
         Read webpage content using Jina service.
@@ -256,6 +292,7 @@ class Visit(BaseTool):
         """
         Read webpage content, using direct fetch if USE_DIRECT_FETCH is enabled,
         otherwise falling back to Jina service.
+        When ENABLE_SUMMARY is false, uses Jina search endpoint instead of reader.
         """
         # If direct fetch is enabled, try it first
         if USE_DIRECT_FETCH:
@@ -265,7 +302,18 @@ class Visit(BaseTool):
             # If direct fetch fails, don't retry with Jina, just return failure
             return "[visit] Failed to read page."
         
-        # Otherwise use Jina service with retries
+        # If ENABLE_SUMMARY is false, use Jina search endpoint
+        if not ENABLE_SUMMARY:
+            max_attempts = 8
+            for attempt in range(max_attempts):
+                content = self.jina_search(url)
+                service = "jina_search"
+                # print(service)
+                if content and not content.startswith("[visit] Failed to search.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
+                    return content
+            return "[visit] Failed to search."
+        
+        # Otherwise use Jina reader service with retries
         max_attempts = 8
         for attempt in range(max_attempts):
             content = self.jina_readpage(url)
@@ -293,7 +341,7 @@ class Visit(BaseTool):
         content = self.html_readpage_jina(url)
 
         # If content fetch failed, return early without summary
-        if not content or content.startswith("[visit] Failed to read page.") or content == "[visit] Empty content." or content.startswith("[document_parser]"):
+        if not content or content.startswith("[visit] Failed to read page.") or content.startswith("[visit] Failed to search.") or content == "[visit] Empty content." or content.startswith("[document_parser]"):
             useful_information = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=url, goal=goal)
             useful_information += "Evidence in page: \n" + "The provided webpage content could not be accessed. Please check the URL or file format." + "\n\n"
             useful_information += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
