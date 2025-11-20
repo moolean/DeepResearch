@@ -211,7 +211,7 @@ class Visit(BaseTool):
         """Extract domain from URL."""
         try:
             parsed = urlparse(url)
-            return parsed.netloc
+            return parsed.netloc if parsed.netloc else url
         except:
             return url
 
