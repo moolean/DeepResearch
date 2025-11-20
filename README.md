@@ -186,11 +186,13 @@ You can now customize which tools are available during inference by setting `ENA
 
 ```bash
 # Enable only specific tools (comma-separated)
-ENABLED_TOOLS=search,visit,PythonInterpreter
+ENABLED_TOOLS=search,visit,fetch_url,browse,PythonInterpreter
 
 # Available tools:
 # - search: Google web search
-# - visit: Web page visiting and summarization
+# - visit: Web page visiting and summarization (requires url and goal)
+# - fetch_url: Fetch webpage content without summarization (requires only url)
+# - browse: Browse the web using search queries via Jina (requires query, no url)
 # - google_scholar: Academic paper search via Google Scholar
 # - PythonInterpreter: Python code execution sandbox
 # - parse_file: Parse uploaded files (PDF, DOCX, etc.)

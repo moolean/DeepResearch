@@ -1,39 +1,20 @@
 import json
 import os
-import signal
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Union
-import requests
 from qwen_agent.tools.base import BaseTool, register_tool
 from prompt import EXTRACTOR_PROMPT 
 from openai import OpenAI
-import random
-from urllib.parse import urlparse, unquote
 import time 
-from transformers import AutoTokenizer
-import tiktoken
-import re
-from bs4 import BeautifulSoup
+from tool_visit_utils import (
+    fetch_webpage_content,
+    truncate_to_tokens,
+    remove_text_links,
+    get_domain,
+    WEBCONTENT_MAXLENGTH
+)
 
 VISIT_SERVER_TIMEOUT = int(os.getenv("VISIT_SERVER_TIMEOUT", 200))
-WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 150000))
-
-JINA_API_KEYS = os.getenv("JINA_API_KEYS", "")
-USE_DIRECT_FETCH = os.getenv("USE_DIRECT_FETCH", "false").lower() == "true"
 ENABLE_SUMMARY = os.getenv("ENABLE_SUMMARY", "true").lower() == "true"
-
-
-@staticmethod
-def truncate_to_tokens(text: str, max_tokens: int = 95000) -> str:
-    encoding = tiktoken.get_encoding("cl100k_base")
-    
-    tokens = encoding.encode(text)
-    if len(tokens) <= max_tokens:
-        return text
-    
-    truncated_tokens = tokens[:max_tokens]
-    return encoding.decode(truncated_tokens)
 
 OSS_JSON_FORMAT = """# Response Formats
 ## visit_content
@@ -133,215 +114,27 @@ class Visit(BaseTool):
                 continue
 
 
-    def direct_fetch_url(self, url: str, max_retries: int = 3) -> str:
-        """
-        Directly fetch URL content using requests with comprehensive headers to bypass anti-scraping.
-        
-        Args:
-            url: The URL to fetch
-            max_retries: Maximum number of retry attempts
-            
-        Returns:
-            str: The webpage content or error message
-        """
-        for attempt in range(max_retries):
-            try:
-                # Set comprehensive headers to mimic a real browser
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "DNT": "1",
-                    "Connection": "keep-alive",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "none",
-                    "Sec-Fetch-User": "?1",
-                    "Cache-Control": "max-age=0",
-                    "Referer": "https://www.google.com/"
-                }
-                
-                response = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=30,
-                    allow_redirects=True
-                )
-                
-                if response.status_code == 200:
-                    # Parse HTML content to extract text
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    
-                    # Remove script and style elements
-                    for script in soup(["script", "style"]):
-                        script.decompose()
-                    
-                    # Get text
-                    text = soup.get_text()
-                    
-                    # Break into lines and remove leading/trailing space on each
-                    lines = (line.strip() for line in text.splitlines())
-                    # Break multi-headlines into a line each
-                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                    # Drop blank lines
-                    text = '\n'.join(chunk for chunk in chunks if chunk)
-                    
-                    if len(text) > 100:  # Ensure we got meaningful content
-                        return text
-                    else:
-                        raise ValueError("Content too short, possibly failed to fetch")
-                else:
-                    print(f"Direct fetch attempt {attempt + 1}/{max_retries}: HTTP {response.status_code}")
-                    
-            except Exception as e:
-                print(f"Direct fetch attempt {attempt + 1}/{max_retries} failed: {str(e)}")
-                if attempt < max_retries - 1:
-                    # Exponential backoff
-                    time.sleep(0.5 * (2 ** attempt))
-                    
-        return "[visit] Failed to read page."
 
-    def remove_text_links(self, text: str) -> str:
-        """Remove markdown-style links from text."""
-        return re.sub(r'\[(.*?)\]\((.*?)\)', r'\1', text)
-    
-    def get_domain(self, url: str) -> str:
-        """Extract domain from URL."""
-        try:
-            parsed = urlparse(url)
-            return parsed.netloc if parsed.netloc else url
-        except:
-            return url
-
-    def jina_search(self, url: str) -> str:
-        """
-        Search using Jina search service.
-        
-        Args:
-            url: The URL to search for
-            
-        Returns:
-            str: The search results or error message
-        """
-        max_retries = 3
-        timeout = 50
-        
-        for attempt in range(max_retries):
-            headers = {
-                "Authorization": f"Bearer {JINA_API_KEYS}",
-            }
-            try:
-                response = requests.get(
-                    f"https://s.jina.ai/?q={url}",
-                    headers=headers,
-                    timeout=timeout
-                )
-                if response.status_code == 200:
-                    search_content = response.text
-                    return search_content
-                else:
-                    # print(response.text)
-                    raise ValueError("jina search error")
-            except Exception as e:
-                time.sleep(0.5)
-                if attempt == max_retries - 1:
-                    return "[visit] Failed to search."
-                
-        return "[visit] Failed to search."
-
-    def jina_readpage(self, url: str) -> str:
-        """
-        Read webpage content using Jina service.
-        
-        Args:
-            url: The URL to read
-            goal: The goal/purpose of reading the page
-            
-        Returns:
-            str: The webpage content or error message
-        """
-        max_retries = 3
-        timeout = 50
-        
-        for attempt in range(max_retries):
-            headers = {
-                "Authorization": f"Bearer {JINA_API_KEYS}",
-            }
-            try:
-                response = requests.get(
-                    f"https://r.jina.ai/{url}",
-                    headers=headers,
-                    timeout=timeout
-                )
-                if response.status_code == 200:
-                    webpage_content = response.text
-                    return webpage_content
-                else:
-                    # print(response.text)
-                    raise ValueError("jina readpage error")
-            except Exception as e:
-                time.sleep(0.5)
-                if attempt == max_retries - 1:
-                    return "[visit] Failed to read page."
-                
-        return "[visit] Failed to read page."
-
-    def html_readpage_jina(self, url: str) -> str:
-        """
-        Read webpage content, using direct fetch if USE_DIRECT_FETCH is enabled,
-        otherwise falling back to Jina service.
-        When ENABLE_SUMMARY is false, uses Jina search endpoint instead of reader.
-        """
-        # If direct fetch is enabled, try it first
-        if USE_DIRECT_FETCH:
-            content = self.direct_fetch_url(url)
-            if content and not content.startswith("[visit] Failed to read page."):
-                return content
-            # If direct fetch fails, don't retry with Jina, just return failure
-            return "[visit] Failed to read page."
-        
-        # If ENABLE_SUMMARY is false, use Jina search endpoint
-        if not ENABLE_SUMMARY:
-            max_attempts = 8
-            for attempt in range(max_attempts):
-                content = self.jina_search(url)
-                service = "jina_search"
-                # print(service)
-                if content and not content.startswith("[visit] Failed to search.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
-                    return content
-            return "[visit] Failed to search."
-        
-        # Otherwise use Jina reader service with retries
-        max_attempts = 8
-        for attempt in range(max_attempts):
-            content = self.jina_readpage(url)
-            service = "jina"     
-            # print(service)
-            if content and not content.startswith("[visit] Failed to read page.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
-                return content
-        return "[visit] Failed to read page."
 
     def readpage_jina(self, url: str, goal: str) -> str:
         """
-        Attempt to read webpage content by alternating between jina and aidata services.
+        Fetch webpage content and summarize it based on the goal.
         
         Args:
             url: The URL to read
             goal: The goal/purpose of reading the page
             
         Returns:
-            str: The webpage content or error message
+            str: The summarized webpage content or error message
         """
-   
         summary_page_func = self.call_server
         max_retries = int(os.getenv('VISIT_SERVER_MAX_RETRIES', 1))
 
-        content = self.html_readpage_jina(url)
+        # Fetch webpage content using shared utility
+        content = fetch_webpage_content(url)
 
         # If content fetch failed, return early without summary
-        if not content or content.startswith("[visit] Failed to read page.") or content.startswith("[visit] Failed to search.") or content == "[visit] Empty content." or content.startswith("[document_parser]"):
+        if not content or content.startswith("[Failed]") or content == "[Failed] Empty content." or content.startswith("[document_parser]"):
             useful_information = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=url, goal=goal)
             useful_information += "Evidence in page: \n" + "The provided webpage content could not be accessed. Please check the URL or file format." + "\n\n"
             useful_information += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
@@ -350,12 +143,12 @@ class Visit(BaseTool):
         # If ENABLE_SUMMARY is False, return content without summarization
         if not ENABLE_SUMMARY:
             # Clean content by removing markdown links
-            content_cleaned = self.remove_text_links(content)
+            content_cleaned = remove_text_links(content)
             # Truncate content to reasonable length
             content_cleaned = content_cleaned[:WEBCONTENT_MAXLENGTH] if len(content_cleaned) > WEBCONTENT_MAXLENGTH else content_cleaned
             
             # Format similar to Jina search algorithm
-            site_name = self.get_domain(url)
+            site_name = get_domain(url)
             useful_information = f"The information from {url} for user goal '{goal}' as follows:\n\n"
             useful_information += f"[Website]: {site_name}\n"
             useful_information += f"[URL]: {url}\n"
