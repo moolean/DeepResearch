@@ -13,7 +13,7 @@ import tiktoken
 # Environment variables
 JINA_API_KEYS = os.getenv("JINA_API_KEYS", "")
 USE_DIRECT_FETCH = os.getenv("USE_DIRECT_FETCH", "false").lower() == "true"
-WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 150000))
+WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 30000))
 
 
 def truncate_to_tokens(text: str, max_tokens: int = 95000) -> str:
@@ -181,6 +181,7 @@ def jina_readpage(url: str) -> str:
                 headers=headers,
                 timeout=timeout
             )
+            print(f"Jina readpage attempt {attempt + 1}/{max_retries}: HTTP {response.status_code}")
             if response.status_code == 200:
                 webpage_content = response.text
                 return webpage_content

@@ -18,7 +18,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--dataset", type=str, default="gaia")
     parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--stream", type=bool, default=False)
+    parser.add_argument("--stream", type=str, default="False")
+    parser.add_argument("--enable_thinking", type=str, default="False")
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--presence_penalty", type=float, default=1.1)
     parser.add_argument("--max_workers", type=int, default=20)
@@ -32,7 +33,9 @@ if __name__ == "__main__":
     roll_out_count = args.roll_out_count
     total_splits = args.total_splits
     worker_split = args.worker_split
-
+    args.stream = args.stream.lower() == "true"
+    args.enable_thinking = args.enable_thinking.lower() == "true"
+    
     # Validate worker_split
     if worker_split < 1 or worker_split > total_splits:
         print(f"Error: worker_split ({worker_split}) must be between 1 and total_splits ({total_splits})")
@@ -45,12 +48,14 @@ if __name__ == "__main__":
     dataset_dir = os.path.join(model_dir, os.path.basename(args.dataset).replace('.jsonl', '').replace('.json', ''))
 
     os.makedirs(dataset_dir, exist_ok=True)
-
-    print(f"Model name: {model_name}")
-    print(f"Data set path: {args.dataset}")
-    print(f"Output directory: {dataset_dir}")
-    print(f"Number of rollouts: {roll_out_count}")
-    print(f"Data splitting: {worker_split}/{total_splits}")
+    # 格式化打印所有args
+    for arg, value in vars(args).items():
+        print(f"{arg}: {value}")
+    # print(f"Model name: {model_name}")
+    # print(f"Data set path: {args.dataset}")
+    # print(f"Output directory: {dataset_dir}")
+    # print(f"Number of rollouts: {roll_out_count}")
+    # print(f"Data splitting: {worker_split}/{total_splits}")
 
     data_filepath = f"{args.dataset}"
     try:
@@ -164,7 +169,8 @@ if __name__ == "__main__":
                 'temperature': args.temperature,
                 'top_p': args.top_p,
                 'presence_penalty': args.presence_penalty,
-                'stream': args.stream
+                'stream': args.stream,
+                'enable_thinking': args.enable_thinking
             },
             'model_type': 'qwen_dashscope'
         }

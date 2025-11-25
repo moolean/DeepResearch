@@ -615,6 +615,7 @@ class lightllm_ChatCompletions(ChatCompletions):
                     top_k = 50,
                     repetition_penalty = 1.0,
                     stream = False,
+                    enable_thinking = False,
                     **kwargs):
         """
         Create a chat completion using LightLLM API format.
@@ -644,7 +645,7 @@ class lightllm_ChatCompletions(ChatCompletions):
             query = self.template.render(
                 messages=messages,
                 tools=tools if tools else [],
-                enable_thinking=False,
+                enable_thinking=enable_thinking,
                 today_date=self.today_date()
             )
             logger.debug(f"Constructed query with template - query_len: {len(query)}")
@@ -700,7 +701,6 @@ class lightllm_ChatCompletions(ChatCompletions):
         except requests.exceptions.RequestException as e:
             logger.error(f"LightLLM request failed: {e}")
             raise
-        
         # Handle streaming vs non-streaming
         if stream:
             # Aggregate streaming response
@@ -718,6 +718,7 @@ class lightllm_ChatCompletions(ChatCompletions):
             
             # Parse the generated text with error handling
             try:
+                print(response_data)
                 if isinstance(response_data, list):
                     if not response_data:
                         raise ValueError("Empty response list from LightLLM")

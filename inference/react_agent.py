@@ -166,7 +166,8 @@ class MultiTurnReactAgent(FnCallAgent):
                     max_tokens=10000,
                     presence_penalty=self.llm_generate_cfg.get('presence_penalty', 1.1),
                     tools=tools,
-                    stream=self.llm_generate_cfg.get('stream', False)
+                    stream=self.llm_generate_cfg.get('stream', False),
+                    enable_thinking=self.llm_generate_cfg.get('enable_thinking', False)
                 )
 
                 # Extract all three fields from response

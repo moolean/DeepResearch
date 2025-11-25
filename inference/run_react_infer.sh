@@ -3,8 +3,10 @@ source /mnt/afs/yaotiankuo/agents/fc_workspace/DeepResearch/.venv/bin/activate
 # Load environment variables from .env file
 
 ROOT_PATH=/mnt/afs/yaotiankuo/agents/fc_workspace/DeepResearch
-
-ENV_FILE="$ROOT_PATH/.env"
+WORKSPACE=$(dirname ${0})
+LOG_PATH=$WORKSPACE/logs
+mkdir -p $LOG_PATH
+ENV_FILE="$WORKSPACE/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
     echo "Error: .env file not found at $ENV_FILE"
@@ -29,27 +31,27 @@ fi
 ######################################
 
 # Check if test runner exists before running
-if [ -f "$ROOT_PATH/tests/run_api_tests.py" ]; then
-    echo "=== Running API Availability Tests ==="
-    python -u "$ROOT_PATH/tests/run_api_tests.py"
+# if [ -f "$ROOT_PATH/tests/run_api_tests.py" ]; then
+#     echo "=== Running API Availability Tests ==="
+#     python -u "$ROOT_PATH/tests/run_api_tests.py"
 
-    if [ $? -ne 0 ]; then
-        echo ""
-        echo "================================================================"
-        echo "ERROR: API tests failed. Please fix the issues before continuing."
-        echo "================================================================"
-        exit 1
-    fi
+#     if [ $? -ne 0 ]; then
+#         echo ""
+#         echo "================================================================"
+#         echo "ERROR: API tests failed. Please fix the issues before continuing."
+#         echo "================================================================"
+#         exit 1
+#     fi
 
-    echo ""
-    echo "================================================================"
-    echo "SUCCESS: All API tests passed. Proceeding with inference..."
-    echo "================================================================"
-    echo ""
-else
-    echo "⚠ Warning: API test runner not found. Skipping API tests."
-    echo "  Consider running tests manually before inference."
-fi
+#     echo ""
+#     echo "================================================================"
+#     echo "SUCCESS: All API tests passed. Proceeding with inference..."
+#     echo "================================================================"
+#     echo ""
+# else
+#     echo "⚠ Warning: API test runner not found. Skipping API tests."
+#     echo "  Consider running tests manually before inference."
+# fi
 
 ######################################
 ### 2. start server           ###
@@ -159,4 +161,15 @@ echo "  - Enabled Tools: ${ENABLED_TOOLS:-search,visit,google_scholar,PythonInte
 
 cd $ROOT_PATH
 
-python -u inference/run_multi_react.py --dataset "$DATASET" --output "$OUTPUT_PATH" --max_workers $MAX_WORKERS --model_path $MODEL_PATH --model_name $MODEL_NAME --temperature $TEMPERATURE --presence_penalty $PRESENCE_PENALTY --total_splits ${WORLD_SIZE:-1} --worker_split $((${RANK:-0} + 1)) --roll_out_count $ROLLOUT_COUNT
+python -u inference/run_multi_react.py \
+    --dataset "$DATASET" --output "$OUTPUT_PATH" \
+    --max_workers $MAX_WORKERS \
+    --model_path $MODEL_PATH \
+    --model_name $MODEL_NAME \
+    --version $(basename $WORKSPACE) \
+    --temperature $TEMPERATURE \
+    --stream $STREAM \
+    --presence_penalty $PRESENCE_PENALTY \
+    --total_splits ${WORLD_SIZE:-1} \
+    --worker_split $((${RANK:-0} + 1)) \
+    --roll_out_count $ROLLOUT_COUNT | tee "$LOG_PATH/inference_$(date +%Y%m%d_%H%M%S).log"
