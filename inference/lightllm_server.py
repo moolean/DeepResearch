@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Constants
+# ============================================================================
+
+DEFAULT_TEMPLATE_DIR = "template"
+DEFAULT_TEMPLATE_NAME = "chat_template.jinja"
+DEFAULT_STOP_SEQUENCE = "<|im_end|>"
+
+
+# ============================================================================
 # Pydantic Models for OpenAI API compatibility
 # ============================================================================
 
@@ -343,7 +352,7 @@ class LightLLMProxy:
         Returns:
             Dict payload for LightLLM API
         """
-        stop_sequences = ["<|im_end|>"]
+        stop_sequences = [DEFAULT_STOP_SEQUENCE]
         if request.stop:
             stop_sequences.extend(request.stop)
         
@@ -696,11 +705,9 @@ def create_app(
         """
         Update the template configuration at runtime.
         
-        Body:
-            {
-                "template_dir": "path/to/templates",  // optional
-                "template_name": "template.jinja"      // optional
-            }
+        Request body (JSON):
+            - template_dir (optional): Path to templates directory
+            - template_name (optional): Name of the template file
         """
         if proxy is None:
             raise HTTPException(status_code=500, detail="Proxy not initialized")
@@ -755,15 +762,15 @@ Examples:
     parser.add_argument(
         "--template-dir",
         type=str,
-        default=os.path.join(os.path.dirname(__file__), "template"),
-        help="Directory containing Jinja2 templates (default: ./template)"
+        default=os.path.join(os.path.dirname(__file__), DEFAULT_TEMPLATE_DIR),
+        help=f"Directory containing Jinja2 templates (default: ./{DEFAULT_TEMPLATE_DIR})"
     )
     
     parser.add_argument(
         "--template-name",
         type=str,
-        default="chat_template.jinja",
-        help="Name of the template file to use (default: chat_template.jinja)"
+        default=DEFAULT_TEMPLATE_NAME,
+        help=f"Name of the template file to use (default: {DEFAULT_TEMPLATE_NAME})"
     )
     
     parser.add_argument(
